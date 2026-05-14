@@ -42,13 +42,13 @@ func (app App) Run(args []string) int {
 	}
 
 	switch operands[0] {
-	case "__complete-devices":
+	case "__complete-targets":
 		if len(operands) != 1 {
 			return 2
 		}
 		path := resolveConfigPath(*configPath)
 
-		return app.completeDevices(path)
+		return app.completeTargets(path)
 	case "completion":
 		if len(operands) != 2 {
 			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd-rpi completion <bash|zsh>")
@@ -57,14 +57,16 @@ func (app App) Run(args []string) int {
 
 		return printRPICompletion(app.stdout(), operands[1])
 	case "switch":
-		if len(operands) != 2 {
+		req, err := parseSwitchRequest(operands[1:])
+		if err != nil {
+			_, _ = fmt.Fprintln(app.stderr(), err)
 			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd-rpi [--config path] [--state path] switch <target>")
 			return 2
 		}
 
 		path := resolveConfigPath(*configPath)
 
-		return app.switchTarget(path, *statePath, operands[1])
+		return app.switchTarget(path, *statePath, req)
 	case "status":
 		if len(operands) != 1 {
 			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd-rpi [--config path] [--state path] status")
@@ -80,7 +82,7 @@ func (app App) Run(args []string) int {
 
 		path := resolveConfigPath(*configPath)
 
-		return app.listDevices(path)
+		return app.listTargets(path)
 	case "disconnect":
 		if len(operands) != 1 {
 			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd-rpi [--config path] [--state path] disconnect")
@@ -105,26 +107,46 @@ func resolveConfigPath(path string) string {
 	return config.DefaultRPIConfigPath
 }
 
-func (app App) completeDevices(configPath string) int {
+func (app App) completeTargets(configPath string) int {
 	cfg, err := config.LoadRPI(configPath)
 	if err != nil {
 		return 2
 	}
 
-	complete.PrintValues(app.stdout(), complete.MapKeys(cfg.Devices))
+	complete.PrintValues(app.stdout(), complete.MapKeys(cfg.Targets))
 	return 0
 }
 
-func (app App) switchTarget(configPath string, statePath string, target string) int {
+type switchRequest struct {
+	target string
+}
+
+func parseSwitchRequest(args []string) (switchRequest, error) {
+	if len(args) == 0 {
+		return switchRequest{}, fmt.Errorf("missing target")
+	}
+
+	req := switchRequest{target: args[0]}
+	if err := config.ValidateName("switch target", req.target); err != nil {
+		return switchRequest{}, err
+	}
+	if len(args) == 1 {
+		return req, nil
+	}
+
+	return switchRequest{}, fmt.Errorf("unknown switch option: %s", args[1])
+}
+
+func (app App) switchTarget(configPath string, statePath string, req switchRequest) int {
 	cfg, err := config.LoadRPI(configPath)
 	if err != nil {
 		_, _ = fmt.Fprintln(app.stderr(), err)
 		return 2
 	}
 
-	device, ok := cfg.Devices[target]
+	target, ok := cfg.Targets[req.target]
 	if !ok {
-		_, _ = fmt.Fprintf(app.stderr(), "unknown device: %s\n", target)
+		_, _ = fmt.Fprintf(app.stderr(), "unknown target: %s\n", req.target)
 		return 2
 	}
 
@@ -134,7 +156,7 @@ func (app App) switchTarget(configPath string, statePath string, target string) 
 		return 2
 	}
 
-	if ok && current.BluetoothMAC != device.BluetoothMAC && cfg.Behavior.ShouldDisconnectOthers() {
+	if ok && current.BluetoothMAC != target.BluetoothMAC && cfg.Behavior.ShouldDisconnectOthers() {
 		if err := app.runBluetoothctl("disconnect", current.BluetoothMAC); err != nil {
 			_, _ = fmt.Fprintln(app.stderr(), err)
 			return 1
@@ -142,14 +164,14 @@ func (app App) switchTarget(configPath string, statePath string, target string) 
 		app.sleep(time.Duration(cfg.Behavior.ReconnectWaitSec) * time.Second)
 	}
 
-	if err := app.runBluetoothctl("connect", device.BluetoothMAC); err != nil {
+	if err := app.runBluetoothctl("connect", target.BluetoothMAC); err != nil {
 		_, _ = fmt.Fprintln(app.stderr(), err)
 		return 1
 	}
 
 	next := state.State{
-		Target:       target,
-		BluetoothMAC: device.BluetoothMAC,
+		Target:       req.target,
+		BluetoothMAC: target.BluetoothMAC,
 		UpdatedAt:    app.now().UTC(),
 	}
 	if err := state.Save(statePath, next); err != nil {
@@ -175,22 +197,22 @@ func (app App) status(statePath string) int {
 	return 0
 }
 
-func (app App) listDevices(configPath string) int {
+func (app App) listTargets(configPath string) int {
 	cfg, err := config.LoadRPI(configPath)
 	if err != nil {
 		_, _ = fmt.Fprintln(app.stderr(), err)
 		return 2
 	}
 
-	keys := make([]string, 0, len(cfg.Devices))
-	for key := range cfg.Devices {
+	keys := make([]string, 0, len(cfg.Targets))
+	for key := range cfg.Targets {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
 	for _, key := range keys {
-		device := cfg.Devices[key]
-		_, _ = fmt.Fprintf(app.stdout(), "%s -> %s (%s)\n", key, device.Name, device.BluetoothMAC)
+		target := cfg.Targets[key]
+		_, _ = fmt.Fprintf(app.stdout(), "%s -> %s (%s)\n", key, target.Name, target.BluetoothMAC)
 	}
 
 	return 0
@@ -235,7 +257,7 @@ func printRPICompletion(stdout io.Writer, shell string) int {
 
 const rpiBashCompletion = `_kbd_rpi()
 {
-	local cur prev config_args devices commands first_command skip_next
+	local cur prev config_args targets commands first_command skip_next
 	COMPREPLY=()
 	cur="${COMP_WORDS[COMP_CWORD]}"
 	prev="${COMP_WORDS[COMP_CWORD-1]}"
@@ -274,8 +296,8 @@ const rpiBashCompletion = `_kbd_rpi()
 	done
 
 	if [[ "$prev" == "switch" ]]; then
-		devices="$(kbd-rpi "${config_args[@]}" __complete-devices 2>/dev/null)"
-		COMPREPLY=( $(compgen -W "$devices" -- "$cur") )
+		targets="$(kbd-rpi "${config_args[@]}" __complete-targets 2>/dev/null)"
+		COMPREPLY=( $(compgen -W "$targets" -- "$cur") )
 		return 0
 	fi
 
@@ -297,7 +319,7 @@ const rpiZshCompletion = `#compdef kbd-rpi
 
 _kbd_rpi()
 {
-	local -a commands devices config_args
+	local -a commands targets config_args
 	local first_command skip_next
 	commands=(switch status list disconnect completion)
 
@@ -334,8 +356,8 @@ _kbd_rpi()
 	done
 
 	if [[ ${words[CURRENT-1]} == "switch" ]]; then
-		devices=("${(@f)$(kbd-rpi "${config_args[@]}" __complete-devices 2>/dev/null)}")
-		_describe 'device' devices
+		targets=("${(@f)$(kbd-rpi "${config_args[@]}" __complete-targets 2>/dev/null)}")
+		_describe 'target' targets
 		return
 	fi
 

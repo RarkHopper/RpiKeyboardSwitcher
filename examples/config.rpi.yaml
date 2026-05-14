@@ -1,12 +1,12 @@
-devices:
-  desktop:
-    name: Main Desktop
-    bluetooth_mac: AA:BB:CC:DD:EE:01
-
-  laptop:
-    name: Laptop
-    bluetooth_mac: AA:BB:CC:DD:EE:02
+targets: {}
 
 behavior:
   disconnect_others: true
   reconnect_wait_sec: 2
+
+hid:
+  adapter: hci0
+  name: Rpi Keyboard Switcher
+  appearance: keyboard
+  pairable: true
+  discoverable: true

@@ -2,7 +2,3 @@ rpi:
   host: rpi-kbd.local
   user: pi
   remote_command: kbd-rpi
-
-targets:
-  pc1: desktop
-  pc2: laptop

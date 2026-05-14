@@ -15,6 +15,10 @@ import (
 const (
 	DefaultRPIConfigPath = "/etc/kbd-switch/config.yaml"
 	DefaultStatePath     = "/run/kbd-switch/state.json"
+
+	DefaultHIDAdapter     = "hci0"
+	DefaultHIDName        = "Rpi Keyboard Switcher"
+	HIDAppearanceKeyboard = "keyboard"
 )
 
 var (
@@ -23,8 +27,7 @@ var (
 )
 
 type LocalConfig struct {
-	RPI     LocalRPIConfig    `yaml:"rpi"`
-	Targets map[string]string `yaml:"targets"`
+	RPI LocalRPIConfig `yaml:"rpi"`
 }
 
 type LocalRPIConfig struct {
@@ -34,18 +37,27 @@ type LocalRPIConfig struct {
 }
 
 type RPIConfig struct {
-	Devices  map[string]Device `yaml:"devices"`
+	Targets  map[string]Target `yaml:"targets,omitempty"`
 	Behavior Behavior          `yaml:"behavior"`
+	HID      HIDConfig         `yaml:"hid"`
 }
 
-type Device struct {
+type Target struct {
 	Name         string `yaml:"name"`
 	BluetoothMAC string `yaml:"bluetooth_mac"`
 }
 
 type Behavior struct {
-	DisconnectOthers *bool `yaml:"disconnect_others"`
-	ReconnectWaitSec int   `yaml:"reconnect_wait_sec"`
+	DisconnectOthers *bool `yaml:"disconnect_others,omitempty"`
+	ReconnectWaitSec int   `yaml:"reconnect_wait_sec,omitempty"`
+}
+
+type HIDConfig struct {
+	Adapter      string `yaml:"adapter"`
+	Name         string `yaml:"name"`
+	Appearance   string `yaml:"appearance"`
+	Pairable     *bool  `yaml:"pairable,omitempty"`
+	Discoverable *bool  `yaml:"discoverable,omitempty"`
 }
 
 func DefaultLocalConfigPath() (string, error) {
@@ -78,11 +90,58 @@ func LoadRPI(path string) (RPIConfig, error) {
 	if err := loadYAML(path, &cfg); err != nil {
 		return RPIConfig{}, err
 	}
+	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return RPIConfig{}, err
 	}
 
 	return cfg, nil
+}
+
+func SaveRPI(path string, cfg RPIConfig) error {
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if cfg.Targets == nil {
+		cfg.Targets = map[string]Target{}
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+
+	file, err := os.CreateTemp(dir, ".config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temporary config: %w", err)
+	}
+	tempPath := file.Name()
+	defer func() {
+		_ = os.Remove(tempPath)
+	}()
+
+	encoder := yaml.NewEncoder(file)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(cfg); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("encode config: %w", err)
+	}
+	if err := encoder.Close(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("close config encoder: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close temporary config: %w", err)
+	}
+	if err := os.Chmod(tempPath, 0o644); err != nil {
+		return fmt.Errorf("chmod temporary config: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
+	}
+
+	return nil
 }
 
 func (cfg LocalConfig) Validate() error {
@@ -104,14 +163,21 @@ func (cfg LocalConfig) Validate() error {
 	if hasSpace(cfg.RPI.RemoteCommand) {
 		return errors.New("rpi.remote_command must not contain whitespace")
 	}
-	if len(cfg.Targets) == 0 {
-		return errors.New("targets must not be empty")
+	return nil
+}
+
+func (cfg RPIConfig) Validate() error {
+	if cfg.Behavior.ReconnectWaitSec < 0 {
+		return errors.New("behavior.reconnect_wait_sec must not be negative")
 	}
-	for alias, remoteTarget := range cfg.Targets {
-		if err := validateName("targets key", alias); err != nil {
+	if err := cfg.HID.Validate(); err != nil {
+		return err
+	}
+	for key, target := range cfg.Targets {
+		if err := validateName("targets key", key); err != nil {
 			return err
 		}
-		if err := validateName("targets value", remoteTarget); err != nil {
+		if err := ValidateTarget("targets."+key, target); err != nil {
 			return err
 		}
 	}
@@ -119,23 +185,41 @@ func (cfg LocalConfig) Validate() error {
 	return nil
 }
 
-func (cfg RPIConfig) Validate() error {
-	if len(cfg.Devices) == 0 {
-		return errors.New("devices must not be empty")
+func ValidateTarget(field string, target Target) error {
+	if strings.TrimSpace(target.Name) == "" {
+		return fmt.Errorf("%s.name is required", field)
 	}
-	if cfg.Behavior.ReconnectWaitSec < 0 {
-		return errors.New("behavior.reconnect_wait_sec must not be negative")
+	if !macPattern.MatchString(target.BluetoothMAC) {
+		return fmt.Errorf("%s.bluetooth_mac must be uppercase Bluetooth MAC address", field)
 	}
-	for key, device := range cfg.Devices {
-		if err := validateName("devices key", key); err != nil {
-			return err
-		}
-		if strings.TrimSpace(device.Name) == "" {
-			return fmt.Errorf("devices.%s.name is required", key)
-		}
-		if !macPattern.MatchString(device.BluetoothMAC) {
-			return fmt.Errorf("devices.%s.bluetooth_mac must be uppercase Bluetooth MAC address", key)
-		}
+
+	return nil
+}
+
+func (cfg *RPIConfig) ApplyDefaults() {
+	if cfg.HID.Adapter == "" {
+		cfg.HID.Adapter = DefaultHIDAdapter
+	}
+	if cfg.HID.Name == "" {
+		cfg.HID.Name = DefaultHIDName
+	}
+	if cfg.HID.Appearance == "" {
+		cfg.HID.Appearance = HIDAppearanceKeyboard
+	}
+}
+
+func (hid HIDConfig) Validate() error {
+	if err := validateName("hid.adapter", hid.Adapter); err != nil {
+		return err
+	}
+	if strings.TrimSpace(hid.Name) == "" {
+		return errors.New("hid.name is required")
+	}
+	if hasControl(hid.Name) {
+		return errors.New("hid.name must not contain control characters")
+	}
+	if hid.Appearance != HIDAppearanceKeyboard {
+		return errors.New("hid.appearance must be keyboard")
 	}
 
 	return nil
@@ -143,6 +227,14 @@ func (cfg RPIConfig) Validate() error {
 
 func (behavior Behavior) ShouldDisconnectOthers() bool {
 	return behavior.DisconnectOthers == nil || *behavior.DisconnectOthers
+}
+
+func (hid HIDConfig) PairableEnabled() bool {
+	return hid.Pairable == nil || *hid.Pairable
+}
+
+func (hid HIDConfig) DiscoverableEnabled() bool {
+	return hid.Discoverable == nil || *hid.Discoverable
 }
 
 func loadYAML(path string, out any) error {
@@ -171,9 +263,23 @@ func validateName(field string, value string) error {
 	return nil
 }
 
+func ValidateName(field string, value string) error {
+	return validateName(field, value)
+}
+
 func hasSpace(value string) bool {
 	for _, char := range value {
 		if unicode.IsSpace(char) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasControl(value string) bool {
+	for _, char := range value {
+		if unicode.IsControl(char) {
 			return true
 		}
 	}

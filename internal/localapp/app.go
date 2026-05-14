@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 
-	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/complete"
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/config"
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/execx"
 )
@@ -63,8 +61,7 @@ func (app App) Run(args []string) int {
 		if len(operands) != 1 {
 			return 2
 		}
-		complete.PrintValues(app.stdout(), complete.MapKeys(cfg.Targets))
-		return 0
+		return app.runSSH(cfg, "__complete-targets")
 	case "switch":
 		if len(operands) != 2 {
 			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd [--config path] switch <target>")
@@ -76,8 +73,7 @@ func (app App) Run(args []string) int {
 			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd [--config path] list")
 			return 2
 		}
-		printLocalTargets(app.stdout(), cfg.Targets)
-		return 0
+		return app.runSSH(cfg, "list")
 	case "status":
 		if len(operands) != 1 {
 			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd [--config path] status")
@@ -95,13 +91,12 @@ func (app App) Run(args []string) int {
 }
 
 func (app App) switchTarget(cfg config.LocalConfig, target string) int {
-	remoteTarget, ok := cfg.Targets[target]
-	if !ok {
-		_, _ = fmt.Fprintf(app.stderr(), "unknown target: %s\n", target)
+	if err := config.ValidateName("target", target); err != nil {
+		_, _ = fmt.Fprintln(app.stderr(), err)
 		return 2
 	}
 
-	return app.runSSH(cfg, "switch", remoteTarget)
+	return app.runSSH(cfg, "switch", target)
 }
 
 func (app App) runSSH(cfg config.LocalConfig, args ...string) int {
@@ -124,18 +119,6 @@ func resolveConfigPath(path string) (string, error) {
 	}
 
 	return config.DefaultLocalConfigPath()
-}
-
-func printLocalTargets(stdout io.Writer, targets map[string]string) {
-	keys := make([]string, 0, len(targets))
-	for key := range targets {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	for _, key := range keys {
-		_, _ = fmt.Fprintf(stdout, "%s -> %s\n", key, targets[key])
-	}
 }
 
 func printLocalCompletion(stdout io.Writer, shell string) int {

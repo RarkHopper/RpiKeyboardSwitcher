@@ -30,7 +30,7 @@ func (runner *fakeRunner) Run(_ context.Context, _ io.Reader, _ io.Writer, _ io.
 	return runner.err
 }
 
-func TestPC側CLIはtargetをSSH呼び出しへ変換する(t *testing.T) {
+func TestPC側CLIはtarget名をRaspberryPi側へ渡す(t *testing.T) {
 	configPath := writeLocalConfig(t)
 	runner := &fakeRunner{}
 
@@ -46,7 +46,7 @@ func TestPC側CLIはtargetをSSH呼び出しへ変換する(t *testing.T) {
 	want := []commandCall{
 		{
 			name: "ssh",
-			args: []string{"pi@rpi-kbd.local", "kbd-rpi", "switch", "desktop"},
+			args: []string{"pi@rpi-kbd.local", "kbd-rpi", "switch", "pc1"},
 		},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
@@ -70,7 +70,7 @@ func TestPC側CLIはswitchサブコマンドでコマンドと同じtarget名を
 	want := []commandCall{
 		{
 			name: "ssh",
-			args: []string{"pi@rpi-kbd.local", "kbd-rpi", "switch", "switch"},
+			args: []string{"pi@rpi-kbd.local", "kbd-rpi", "switch", "status"},
 		},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
@@ -78,14 +78,14 @@ func TestPC側CLIはswitchサブコマンドでコマンドと同じtarget名を
 	}
 }
 
-func TestPC側CLIは未知のtargetではSSHを実行しない(t *testing.T) {
+func TestPC側CLIは不正なtarget名ではSSHを実行しない(t *testing.T) {
 	configPath := writeLocalConfig(t)
 	runner := &fakeRunner{}
 
 	code := localapp.App{
 		Runner: runner,
 		Stderr: &bytes.Buffer{},
-	}.Run([]string{"--config", configPath, "missing"})
+	}.Run([]string{"--config", configPath, "bad/name"})
 
 	if code != 2 {
 		t.Fatalf("終了コード = %d, want 2", code)
@@ -95,12 +95,12 @@ func TestPC側CLIは未知のtargetではSSHを実行しない(t *testing.T) {
 	}
 }
 
-func TestPC側CLIはローカルtarget一覧を表示する(t *testing.T) {
+func TestPC側CLIはtarget一覧をRaspberryPi側へ問い合わせる(t *testing.T) {
 	configPath := writeLocalConfig(t)
-	stdout := &bytes.Buffer{}
+	runner := &fakeRunner{}
 
 	code := localapp.App{
-		Stdout: stdout,
+		Runner: runner,
 		Stderr: &bytes.Buffer{},
 	}.Run([]string{"--config", configPath, "list"})
 
@@ -108,18 +108,23 @@ func TestPC側CLIはローカルtarget一覧を表示する(t *testing.T) {
 		t.Fatalf("終了コード = %d, want 0", code)
 	}
 
-	want := "pc1 -> desktop\npc2 -> laptop\n"
-	if stdout.String() != want {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	want := []commandCall{
+		{
+			name: "ssh",
+			args: []string{"pi@rpi-kbd.local", "kbd-rpi", "list"},
+		},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 }
 
-func TestPC側CLIは設定済みtarget名を補完候補として出す(t *testing.T) {
+func TestPC側CLIはtarget補完をRaspberryPi側へ問い合わせる(t *testing.T) {
 	configPath := writeLocalConfigWithReservedName(t)
-	stdout := &bytes.Buffer{}
+	runner := &fakeRunner{}
 
 	code := localapp.App{
-		Stdout: stdout,
+		Runner: runner,
 		Stderr: &bytes.Buffer{},
 	}.Run([]string{"--config", configPath, "__complete-targets"})
 
@@ -127,19 +132,24 @@ func TestPC側CLIは設定済みtarget名を補完候補として出す(t *testi
 		t.Fatalf("終了コード = %d, want 0", code)
 	}
 
-	want := "pc1\nstatus\n"
-	if stdout.String() != want {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	want := []commandCall{
+		{
+			name: "ssh",
+			args: []string{"pi@rpi-kbd.local", "kbd-rpi", "__complete-targets"},
+		},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 }
 
 func TestPC側CLIは環境変数の設定ファイルを読む(t *testing.T) {
 	configPath := writeLocalConfig(t)
 	t.Setenv("KBD_CONFIG", configPath)
-	stdout := &bytes.Buffer{}
+	runner := &fakeRunner{}
 
 	code := localapp.App{
-		Stdout: stdout,
+		Runner: runner,
 		Stderr: &bytes.Buffer{},
 	}.Run([]string{"list"})
 
@@ -147,9 +157,14 @@ func TestPC側CLIは環境変数の設定ファイルを読む(t *testing.T) {
 		t.Fatalf("終了コード = %d, want 0", code)
 	}
 
-	want := "pc1 -> desktop\npc2 -> laptop\n"
-	if stdout.String() != want {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	want := []commandCall{
+		{
+			name: "ssh",
+			args: []string{"pi@rpi-kbd.local", "kbd-rpi", "list"},
+		},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 }
 
@@ -178,10 +193,6 @@ rpi:
   host: rpi-kbd.local
   user: pi
   remote_command: kbd-rpi
-
-targets:
-  pc2: laptop
-  pc1: desktop
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
@@ -199,10 +210,6 @@ rpi:
   host: rpi-kbd.local
   user: pi
   remote_command: kbd-rpi
-
-targets:
-  pc1: desktop
-  status: switch
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)

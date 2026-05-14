@@ -70,14 +70,14 @@ func TestRaspberryPi側CLIはswitchで接続してstateを書き込む(t *testin
 	}
 }
 
-func TestRaspberryPi側CLIはコマンドと同じdevice名を補完候補として出す(t *testing.T) {
+func TestRaspberryPi側CLIはコマンドと同じtarget名を補完候補として出す(t *testing.T) {
 	configPath := writeRPIConfigWithReservedName(t)
 	stdout := &bytes.Buffer{}
 
 	code := rpiapp.App{
 		Stdout: stdout,
 		Stderr: &bytes.Buffer{},
-	}.Run([]string{"--config", configPath, "__complete-devices"})
+	}.Run([]string{"--config", configPath, "__complete-targets"})
 
 	if code != 0 {
 		t.Fatalf("終了コード = %d, want 0", code)
@@ -97,7 +97,7 @@ func TestRaspberryPi側CLIは環境変数の設定ファイルを補完に使う
 	code := rpiapp.App{
 		Stdout: stdout,
 		Stderr: &bytes.Buffer{},
-	}.Run([]string{"__complete-devices"})
+	}.Run([]string{"__complete-targets"})
 
 	if code != 0 {
 		t.Fatalf("終了コード = %d, want 0", code)
@@ -196,7 +196,7 @@ func TestRaspberryPi側CLIはdisconnectで切断してstateを削除する(t *te
 func TestRaspberryPi側CLIは不正なMACを含む設定を拒否する(t *testing.T) {
 	configPath := t.TempDir() + "/config.yaml"
 	content := []byte(`
-devices:
+targets:
   laptop:
     name: Laptop
     bluetooth_mac: aa:bb:cc:dd:ee:02
@@ -219,7 +219,7 @@ devices:
 	}
 }
 
-func TestRaspberryPi側CLIは未知のdeviceでは接続しない(t *testing.T) {
+func TestRaspberryPi側CLIは未知のtargetでは接続しない(t *testing.T) {
 	configPath := writeRPIConfig(t)
 	runner := &fakeRunner{}
 
@@ -262,7 +262,7 @@ func writeRPIConfig(t *testing.T) string {
 
 	path := t.TempDir() + "/config.yaml"
 	content := []byte(`
-devices:
+targets:
   desktop:
     name: Main Desktop
     bluetooth_mac: AA:BB:CC:DD:EE:01
@@ -285,12 +285,12 @@ func writeRPIConfigWithReservedName(t *testing.T) string {
 
 	path := t.TempDir() + "/config.yaml"
 	content := []byte(`
-devices:
+targets:
   desktop:
     name: Main Desktop
     bluetooth_mac: AA:BB:CC:DD:EE:01
   switch:
-    name: Switch Named Device
+    name: Switch Named Target
     bluetooth_mac: AA:BB:CC:DD:EE:03
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
