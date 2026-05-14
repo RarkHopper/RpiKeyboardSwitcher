@@ -1,0 +1,13 @@
+[Unit]
+Description=RpiKeyboardSwitcher BLE HID keyboard daemon
+Requires=bluetooth.service
+After=dbus.service bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/kbd-hid daemon --config /etc/kbd-switch/config.yaml
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
