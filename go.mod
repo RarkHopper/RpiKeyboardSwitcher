@@ -2,4 +2,9 @@ module github.com/RarkHopper/RpiKeyboardSwitcher
 
 go 1.24.0
 
-require go.yaml.in/yaml/v3 v3.0.4
+require (
+	github.com/godbus/dbus/v5 v5.2.2
+	go.yaml.in/yaml/v3 v3.0.4
+)
+
+require golang.org/x/sys v0.27.0 // indirect
