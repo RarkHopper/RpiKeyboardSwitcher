@@ -1,0 +1,6 @@
+.git
+.gitignore
+tmp
+dist
+bin
+coverage.out
