@@ -53,12 +53,17 @@ kbd switch laptop
 開発PCで3つのバイナリを作ります。
 
 ```sh
-go build -o dist/kbd ./cmd/kbd
-GOOS=linux GOARCH=arm64 go build -o dist/kbd-rpi ./cmd/kbd-rpi
-GOOS=linux GOARCH=arm64 go build -o dist/kbd-hid ./cmd/kbd-hid
+make build
 ```
 
-64-bit Raspberry Pi OS なら `GOARCH=arm64`、32-bit Raspberry Pi OS なら `GOARCH=arm` を使います。
+既定では、PC 側の `kbd` は開発PCと同じ OS/CPU 向け、Raspberry Pi 側の `kbd-rpi` と `kbd-hid` は 64-bit Raspberry Pi OS 向けに `linux/arm64` で作ります。
+
+32-bit Raspberry Pi OS 向けに作る場合は `RPI_GOARCH=arm` を渡します。
+
+```sh
+RPI_GOARCH=arm make build
+```
+
 
 ### 2. Raspberry Pi へ配置
 

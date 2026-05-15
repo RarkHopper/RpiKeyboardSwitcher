@@ -54,12 +54,16 @@ These steps build on a development PC, then place files on the Raspberry Pi and 
 Build the three binaries on the development PC.
 
 ```sh
-go build -o dist/kbd ./cmd/kbd
-GOOS=linux GOARCH=arm64 go build -o dist/kbd-rpi ./cmd/kbd-rpi
-GOOS=linux GOARCH=arm64 go build -o dist/kbd-hid ./cmd/kbd-hid
+make build
 ```
 
-Use `GOARCH=arm64` for 64-bit Raspberry Pi OS and `GOARCH=arm` for 32-bit Raspberry Pi OS.
+By default, `kbd` is built for the development PC OS/CPU, while `kbd-rpi` and `kbd-hid` are built for 64-bit Raspberry Pi OS as `linux/arm64`.
+
+For 32-bit Raspberry Pi OS, pass `RPI_GOARCH=arm`.
+
+```sh
+RPI_GOARCH=arm make build
+```
 
 ### 2. Deploy To The Raspberry Pi
 
