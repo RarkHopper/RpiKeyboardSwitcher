@@ -45,7 +45,13 @@ kbd switch laptop
 
 The generated target key and display name are meant to be edited by the user. The Bluetooth MAC address is the cached connection information and should usually be left alone.
 
-## Build
+## Setup
+
+These steps build on a development PC, then place files on the Raspberry Pi and on the PC that runs switch commands. The examples use `pi@rpi-kbd.local` as the Raspberry Pi SSH target.
+
+### 1. Build
+
+Build the three binaries on the development PC.
 
 ```sh
 go build -o dist/kbd ./cmd/kbd
@@ -53,48 +59,43 @@ GOOS=linux GOARCH=arm64 go build -o dist/kbd-rpi ./cmd/kbd-rpi
 GOOS=linux GOARCH=arm64 go build -o dist/kbd-hid ./cmd/kbd-hid
 ```
 
-Use `GOARCH=arm` instead of `arm64` for a 32-bit Raspberry Pi OS install.
+Use `GOARCH=arm64` for 64-bit Raspberry Pi OS and `GOARCH=arm` for 32-bit Raspberry Pi OS.
 
-## PC Setup
+### 2. Deploy To The Raspberry Pi
 
-Create the PC-side config:
-
-```sh
-mkdir -p ~/.config/kbd-switch
-$EDITOR ~/.config/kbd-switch/config.yaml
-```
-
-Format:
-
-```yaml
-rpi:
-  host: rpi-kbd.local
-  user: pi
-  remote_command: kbd-rpi
-```
-
-Fields:
-
-- `rpi.host`: SSH host name or address for the Raspberry Pi.
-- `rpi.user`: SSH user.
-- `rpi.remote_command`: command name or path to run on the Raspberry Pi. It must not contain whitespace.
-
-The PC config intentionally does not contain Bluetooth target addresses. `kbd list`, `kbd switch <target>`, and tab completion ask the Raspberry Pi over SSH.
-
-Examples:
+Copy `kbd-rpi`, `kbd-hid`, and the systemd unit to the Raspberry Pi from the development PC.
 
 ```sh
-kbd list
-kbd switch laptop
-kbd laptop
-kbd status
+scp dist/kbd-rpi dist/kbd-hid rpi/systemd/kbd-hid.service pi@rpi-kbd.local:/tmp/
+ssh pi@rpi-kbd.local
 ```
 
-`kbd laptop` is a shorthand for `kbd switch laptop`. If a target has the same name as a command, use `kbd switch <target>`.
+Run the commands up to the systemd start from the Raspberry Pi shell.
 
-SSH keys, `ssh-agent`, `known_hosts`, and host aliases should be configured through OpenSSH. Set `KBD_CONFIG=/path/to/config.yaml` to use a different config path without passing `--config` every time.
+The Raspberry Pi needs BlueZ and SSH. The Bluetooth adapter is usually named `hci0`.
 
-## Raspberry Pi Setup
+```sh
+command -v bluetoothctl
+systemctl is-active bluetooth.service
+ls /sys/class/bluetooth
+```
+
+If `bluetoothctl` is missing, install BlueZ on the Raspberry Pi.
+
+```sh
+sudo apt-get update
+sudo apt-get install -y bluez
+sudo systemctl enable --now bluetooth.service
+```
+
+If `ls /sys/class/bluetooth` does not show `hci0`, check the Raspberry Pi Bluetooth settings before continuing.
+
+Install the binaries under `/usr/local/bin`.
+
+```sh
+sudo install -D -m 0755 /tmp/kbd-rpi /usr/local/bin/kbd-rpi
+sudo install -D -m 0755 /tmp/kbd-hid /usr/local/bin/kbd-hid
+```
 
 Create the Raspberry Pi config:
 
@@ -144,24 +145,76 @@ Fields:
 
 Target names may contain only letters, digits, `_`, `-`, and `.`. Unknown YAML fields are rejected.
 
-## Learn A Target
+### 3. Inspect BLE HID Settings
 
-Stop the systemd service if it is already running and you want to use `--test-text` for the first check:
-
-```sh
-sudo systemctl stop kbd-hid.service
-sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
-```
-
-On the target PC, open the OS Bluetooth settings and pair with `Rpi Keyboard Switcher`. Once the host subscribes to HID notifications, `kbd-hid` reads the connected BlueZ device and adds it to `targets`. If the same Bluetooth MAC address is already present, the existing target key and name are kept.
-
-Inspect the BLE settings without touching Bluetooth:
+Check the settings read by `kbd-hid` before touching Bluetooth:
 
 ```sh
 kbd-hid inspect --config /etc/kbd-switch/config.yaml
 ```
 
-## Switch Targets
+### 4. Learn A Target
+
+For the first check, start `kbd-hid` by hand instead of systemd and verify pairing plus test input from a target PC.
+
+```sh
+sudo systemctl stop kbd-hid.service 2>/dev/null || true
+sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
+```
+
+This command keeps running. On the target PC, open the OS Bluetooth settings and pair with `Rpi Keyboard Switcher`. Once the host subscribes to HID notifications, `kbd-hid` reads the connected BlueZ device and adds it to `targets`. If the same Bluetooth MAC address is already present, the existing target key and name are kept.
+
+When the target PC receives `a` and `/etc/kbd-switch/config.yaml` gains a `targets` entry, stop the command with `Ctrl-C`. You can edit the generated target key and display name at this point. Leave the Bluetooth MAC address unchanged unless you know it is wrong.
+
+### 5. Run kbd-hid Under systemd
+
+After the manual check passes, start `kbd-hid` with systemd.
+
+```sh
+sudo install -D -m 0644 /tmp/kbd-hid.service /etc/systemd/system/kbd-hid.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now kbd-hid.service
+sudo journalctl -u kbd-hid.service -f
+```
+
+### 6. Install The PC Command
+
+Exit the Raspberry Pi shell, then install `kbd` on the PC that runs switch commands.
+
+```sh
+mkdir -p ~/.local/bin
+install -m 0755 dist/kbd ~/.local/bin/kbd
+```
+
+If `~/.local/bin` is not on PATH, add it or install `kbd` somewhere else.
+
+Create the PC-side config:
+
+```sh
+mkdir -p ~/.config/kbd-switch
+$EDITOR ~/.config/kbd-switch/config.yaml
+```
+
+Format:
+
+```yaml
+rpi:
+  host: rpi-kbd.local
+  user: pi
+  remote_command: kbd-rpi
+```
+
+Fields:
+
+- `rpi.host`: SSH host name or address for the Raspberry Pi.
+- `rpi.user`: SSH user.
+- `rpi.remote_command`: command name or path to run on the Raspberry Pi. It must not contain whitespace.
+
+The PC config intentionally does not contain Bluetooth target addresses. `kbd list`, `kbd switch <target>`, and tab completion ask the Raspberry Pi over SSH.
+
+SSH keys, `ssh-agent`, `known_hosts`, and host aliases should be configured through OpenSSH. Set `KBD_CONFIG=/path/to/config.yaml` to use a different config path without passing `--config` every time.
+
+### 7. Check Switching
 
 On the Raspberry Pi:
 
@@ -176,29 +229,14 @@ From a PC with `kbd` installed:
 
 ```sh
 kbd list
+kbd switch laptop
 kbd laptop
 kbd status
 ```
 
+`kbd laptop` is a shorthand for `kbd switch laptop`. If a target has the same name as a command, use `kbd switch <target>`.
+
 The default Raspberry Pi state path is `/run/kbd-switch/state.json`. Set `KBD_RPI_CONFIG=/path/to/config.yaml` to use a different Raspberry Pi config path.
-
-## systemd
-
-Install the Raspberry Pi binaries and systemd unit:
-
-```sh
-sudo install -D -m 0755 dist/kbd-rpi /usr/local/bin/kbd-rpi
-sudo install -D -m 0755 dist/kbd-hid /usr/local/bin/kbd-hid
-sudo install -D -m 0644 rpi/systemd/kbd-hid.service /etc/systemd/system/kbd-hid.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now kbd-hid.service
-```
-
-Check daemon logs:
-
-```sh
-journalctl -u kbd-hid.service -f
-```
 
 ## Tab Completion
 

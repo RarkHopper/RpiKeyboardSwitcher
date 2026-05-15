@@ -44,7 +44,13 @@ kbd switch laptop
 
 自動生成された接続先名と表示名は、後から `/etc/kbd-switch/config.yaml` で変更できます。Bluetooth MAC アドレスは接続情報なので、通常はそのままにします。
 
-## ビルド
+## セットアップ
+
+ここでは、開発PCでビルドしてから Raspberry Pi と切替コマンドを打つPCへ配置する流れで進めます。例では Raspberry Pi の SSH 接続先を `pi@rpi-kbd.local` とします。
+
+### 1. ビルド
+
+開発PCで3つのバイナリを作ります。
 
 ```sh
 go build -o dist/kbd ./cmd/kbd
@@ -52,48 +58,43 @@ GOOS=linux GOARCH=arm64 go build -o dist/kbd-rpi ./cmd/kbd-rpi
 GOOS=linux GOARCH=arm64 go build -o dist/kbd-hid ./cmd/kbd-hid
 ```
 
-32-bit の Raspberry Pi OS へ入れる場合は `GOARCH=arm` を使います。
+64-bit Raspberry Pi OS なら `GOARCH=arm64`、32-bit Raspberry Pi OS なら `GOARCH=arm` を使います。
 
-## PC 側設定
+### 2. Raspberry Pi へ配置
 
-PC 側の設定ファイルを作ります。
-
-```sh
-mkdir -p ~/.config/kbd-switch
-$EDITOR ~/.config/kbd-switch/config.yaml
-```
-
-形式:
-
-```yaml
-rpi:
-  host: rpi-kbd.local
-  user: pi
-  remote_command: kbd-rpi
-```
-
-項目:
-
-- `rpi.host`: Raspberry Pi の SSH ホスト名またはIPアドレス。
-- `rpi.user`: SSH ユーザー。
-- `rpi.remote_command`: Raspberry Pi で実行するコマンド名またはパス。空白は使えません。
-
-PC 側の設定には Bluetooth 接続先の情報を書きません。`kbd list`、`kbd switch <target>`、補完候補の取得は、SSH 経由で Raspberry Pi に問い合わせます。
-
-例:
+開発PCから Raspberry Pi へ `kbd-rpi`、`kbd-hid`、systemd unit を送ります。
 
 ```sh
-kbd list
-kbd switch laptop
-kbd laptop
-kbd status
+scp dist/kbd-rpi dist/kbd-hid rpi/systemd/kbd-hid.service pi@rpi-kbd.local:/tmp/
+ssh pi@rpi-kbd.local
 ```
 
-`kbd laptop` は `kbd switch laptop` の短縮形です。接続先名がコマンド名と同じ場合は `kbd switch <target>` を使います。
+ここから systemd の起動までは、Raspberry Pi のシェルで実行します。
 
-SSH 鍵、`ssh-agent`、`known_hosts`、ホスト別設定は OpenSSH 側で設定します。`KBD_CONFIG=/path/to/config.yaml` を設定すると、毎回 `--config` を渡さずに別の設定ファイルを使えます。
+Raspberry Pi では BlueZ と SSH を使います。Bluetooth アダプタ名は通常 `hci0` です。
 
-## Raspberry Pi 側設定
+```sh
+command -v bluetoothctl
+systemctl is-active bluetooth.service
+ls /sys/class/bluetooth
+```
+
+`bluetoothctl` がない場合は Raspberry Pi 側に BlueZ を入れます。
+
+```sh
+sudo apt-get update
+sudo apt-get install -y bluez
+sudo systemctl enable --now bluetooth.service
+```
+
+`ls /sys/class/bluetooth` で `hci0` が出ない場合は、Raspberry Pi 側で Bluetooth が無効になっていないかを先に確認します。
+
+バイナリを `/usr/local/bin` に置きます。
+
+```sh
+sudo install -D -m 0755 /tmp/kbd-rpi /usr/local/bin/kbd-rpi
+sudo install -D -m 0755 /tmp/kbd-hid /usr/local/bin/kbd-hid
+```
 
 Raspberry Pi 側の設定ファイルを作ります。
 
@@ -143,24 +144,76 @@ targets:
 
 接続先名に使える文字は英数字、`_`、`-`、`.` だけです。未知の YAML フィールドはエラーにします。
 
-## 接続先を覚えさせる
+### 3. BLE HID の設定を確認
 
-初回確認で `--test-text` を使う場合、すでに systemd サービスが動いていれば止めます。
-
-```sh
-sudo systemctl stop kbd-hid.service
-sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
-```
-
-対象PCのOS Bluetooth設定を開き、`Rpi Keyboard Switcher` とペアリングします。ホストが HID 通知を有効にすると、`kbd-hid` が BlueZ の接続済みデバイスを読み取り、`targets` に保存します。同じ Bluetooth MAC アドレスがすでに保存済みなら、既存の接続先名と表示名を保ちます。
-
-Bluetooth に触らず、使われる BLE 設定だけ確認するには次を使います。
+Bluetooth に触る前に、`kbd-hid` が読む設定を確認します。
 
 ```sh
 kbd-hid inspect --config /etc/kbd-switch/config.yaml
 ```
 
-## 接続先を切り替える
+### 4. 接続先を覚えさせる
+
+初回は systemd ではなく手動で起動し、対象PCとのペアリングとテスト入力を確認します。
+
+```sh
+sudo systemctl stop kbd-hid.service 2>/dev/null || true
+sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
+```
+
+このコマンドは起動したまま待ちます。対象PCのOS Bluetooth設定を開き、`Rpi Keyboard Switcher` とペアリングします。ホストが HID 通知を有効にすると、`kbd-hid` が BlueZ の接続済みデバイスを読み取り、`targets` に保存します。同じ Bluetooth MAC アドレスがすでに保存済みなら、既存の接続先名と表示名を保ちます。
+
+対象PCで `a` が入力され、Raspberry Pi 側の `/etc/kbd-switch/config.yaml` に `targets` が増えたら、`Ctrl-C` で止めます。接続先名や表示名は、この時点で編集できます。Bluetooth MAC アドレスは通常そのままにします。
+
+### 5. systemd で常駐させる
+
+手動起動で確認できたら、`kbd-hid` を systemd で起動します。
+
+```sh
+sudo install -D -m 0644 /tmp/kbd-hid.service /etc/systemd/system/kbd-hid.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now kbd-hid.service
+sudo journalctl -u kbd-hid.service -f
+```
+
+### 6. 切替コマンドを打つPCへ配置
+
+Raspberry Pi のシェルから `exit` で戻り、切替コマンドを打つPCへ `kbd` を置きます。
+
+```sh
+mkdir -p ~/.local/bin
+install -m 0755 dist/kbd ~/.local/bin/kbd
+```
+
+`~/.local/bin` に PATH が通っていない場合は、PATH に追加するか、別の場所に置きます。
+
+PC 側の設定ファイルを作ります。
+
+```sh
+mkdir -p ~/.config/kbd-switch
+$EDITOR ~/.config/kbd-switch/config.yaml
+```
+
+形式:
+
+```yaml
+rpi:
+  host: rpi-kbd.local
+  user: pi
+  remote_command: kbd-rpi
+```
+
+項目:
+
+- `rpi.host`: Raspberry Pi の SSH ホスト名またはIPアドレス。
+- `rpi.user`: SSH ユーザー。
+- `rpi.remote_command`: Raspberry Pi で実行するコマンド名またはパス。空白は使えません。
+
+PC 側の設定には Bluetooth 接続先の情報を書きません。`kbd list`、`kbd switch <target>`、補完候補の取得は、SSH 経由で Raspberry Pi に問い合わせます。
+
+SSH 鍵、`ssh-agent`、`known_hosts`、ホスト別設定は OpenSSH 側で設定します。`KBD_CONFIG=/path/to/config.yaml` を設定すると、毎回 `--config` を渡さずに別の設定ファイルを使えます。
+
+### 7. 切り替えを確認
 
 Raspberry Pi 側:
 
@@ -175,29 +228,14 @@ kbd-rpi disconnect
 
 ```sh
 kbd list
+kbd switch laptop
 kbd laptop
 kbd status
 ```
 
+`kbd laptop` は `kbd switch laptop` の短縮形です。接続先名がコマンド名と同じ場合は `kbd switch <target>` を使います。
+
 Raspberry Pi 側の state の既定パスは `/run/kbd-switch/state.json` です。`KBD_RPI_CONFIG=/path/to/config.yaml` を設定すると、Raspberry Pi 側で別の設定ファイルを使えます。
-
-## systemd
-
-Raspberry Pi 側のバイナリと systemd unit を入れます。
-
-```sh
-sudo install -D -m 0755 dist/kbd-rpi /usr/local/bin/kbd-rpi
-sudo install -D -m 0755 dist/kbd-hid /usr/local/bin/kbd-hid
-sudo install -D -m 0644 rpi/systemd/kbd-hid.service /etc/systemd/system/kbd-hid.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now kbd-hid.service
-```
-
-ログを見るには次を使います。
-
-```sh
-journalctl -u kbd-hid.service -f
-```
 
 ## 補完
 
