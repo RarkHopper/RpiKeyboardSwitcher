@@ -10,3 +10,4 @@ hid:
   appearance: keyboard
   pairable: true
   discoverable: true
+  input_devices: []

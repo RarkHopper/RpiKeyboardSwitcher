@@ -105,6 +105,7 @@ type DaemonOptions struct {
 	Pairable     bool
 	Discoverable bool
 	TestReports  [][]byte
+	InputReports func(context.Context, func([]byte) error) error
 	OnPeerReady  func(Peer) error
 	Log          io.Writer
 }
@@ -203,6 +204,10 @@ func (app *HIDApplication) SendReports(reports [][]byte) error {
 	}
 
 	return nil
+}
+
+func (app *HIDApplication) SendReport(report []byte) error {
+	return app.SendReports([][]byte{report})
 }
 
 func (app *HIDApplication) SendReportsAfterSubscription(ctx context.Context, reports [][]byte) error {
@@ -345,7 +350,7 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 	}()
 
 	readyErrors := make(chan error, 1)
-	if len(options.TestReports) > 0 || options.OnPeerReady != nil {
+	if len(options.TestReports) > 0 || options.OnPeerReady != nil || options.InputReports != nil {
 		go func() {
 			if err := app.WaitForSubscription(ctx); err != nil {
 				if !errors.Is(err, context.Canceled) {
@@ -366,6 +371,12 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 			}
 			if err := app.SendReports(options.TestReports); err != nil {
 				readyErrors <- err
+				return
+			}
+			if options.InputReports != nil {
+				if err := options.InputReports(ctx, app.SendReport); err != nil && !errors.Is(err, context.Canceled) {
+					readyErrors <- err
+				}
 			}
 		}()
 	}

@@ -53,11 +53,12 @@ type Behavior struct {
 }
 
 type HIDConfig struct {
-	Adapter      string `yaml:"adapter"`
-	Name         string `yaml:"name"`
-	Appearance   string `yaml:"appearance"`
-	Pairable     *bool  `yaml:"pairable,omitempty"`
-	Discoverable *bool  `yaml:"discoverable,omitempty"`
+	Adapter      string   `yaml:"adapter"`
+	Name         string   `yaml:"name"`
+	Appearance   string   `yaml:"appearance"`
+	Pairable     *bool    `yaml:"pairable,omitempty"`
+	Discoverable *bool    `yaml:"discoverable,omitempty"`
+	InputDevices []string `yaml:"input_devices,omitempty"`
 }
 
 func DefaultLocalConfigPath() (string, error) {
@@ -220,6 +221,14 @@ func (hid HIDConfig) Validate() error {
 	}
 	if hid.Appearance != HIDAppearanceKeyboard {
 		return errors.New("hid.appearance must be keyboard")
+	}
+	for index, device := range hid.InputDevices {
+		if strings.TrimSpace(device) == "" {
+			return fmt.Errorf("hid.input_devices[%d] is required", index)
+		}
+		if hasControl(device) {
+			return fmt.Errorf("hid.input_devices[%d] must not contain control characters", index)
+		}
 	}
 
 	return nil

@@ -129,6 +129,35 @@ hid:
 	}
 }
 
+func TestRaspberryPi側設定はHID入力デバイスを読める(t *testing.T) {
+	path := writeConfig(t, `
+hid:
+  input_devices:
+    - /dev/input/by-id/usb-Test_Keyboard-event-kbd
+`)
+
+	cfg, err := config.LoadRPI(path)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	want := "/dev/input/by-id/usb-Test_Keyboard-event-kbd"
+	if len(cfg.HID.InputDevices) != 1 || cfg.HID.InputDevices[0] != want {
+		t.Fatalf("input_devices = %#v, want [%q]", cfg.HID.InputDevices, want)
+	}
+}
+
+func TestRaspberryPi側設定は空のHID入力デバイスを拒否する(t *testing.T) {
+	path := writeConfig(t, `
+hid:
+  input_devices:
+    - ""
+`)
+
+	if _, err := config.LoadRPI(path); err == nil {
+		t.Fatal("err = nil, want error")
+	}
+}
+
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 

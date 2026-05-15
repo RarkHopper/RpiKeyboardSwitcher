@@ -25,6 +25,20 @@ func (daemon *fakeDaemon) Run(_ context.Context, options bluez.DaemonOptions) er
 	return daemon.err
 }
 
+type fakeInput struct {
+	reports [][]byte
+}
+
+func (input fakeInput) Run(_ context.Context, send func([]byte) error) error {
+	for _, report := range input.reports {
+		if err := send(report); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func TestHIDCLIはdaemonで設定からBLEkeyboardを起動する(t *testing.T) {
 	configPath := writeConfig(t)
 	daemon := &fakeDaemon{}
@@ -62,6 +76,36 @@ func TestHIDCLIはdaemonで設定からBLEkeyboardを起動する(t *testing.T) 
 	if daemon.options.OnPeerReady == nil {
 		t.Fatal("OnPeerReady is nil")
 	}
+	if daemon.options.InputReports == nil {
+		t.Fatal("InputReports is nil")
+	}
+}
+
+func TestHIDCLIはUSBキーボード入力をBLEreportへ渡す(t *testing.T) {
+	configPath := writeConfig(t)
+	daemon := &fakeDaemon{}
+	wantReport := []byte{0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00}
+
+	code := hidapp.App{
+		Daemon: daemon,
+		Input:  fakeInput{reports: [][]byte{wantReport}},
+		Stderr: &bytes.Buffer{},
+	}.Run([]string{"--config", configPath, "daemon"})
+
+	if code != 0 {
+		t.Fatalf("終了コード = %d, want 0", code)
+	}
+	var gotReports [][]byte
+	err := daemon.options.InputReports(context.Background(), func(report []byte) error {
+		gotReports = append(gotReports, append([]byte(nil), report...))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("InputReports err = %v, want nil", err)
+	}
+	if !reflect.DeepEqual(gotReports, [][]byte{wantReport}) {
+		t.Fatalf("reports = %#v, want %#v", gotReports, [][]byte{wantReport})
+	}
 }
 
 func TestHIDCLIはinspectで実際に使うBLE設定を出す(t *testing.T) {
@@ -80,6 +124,7 @@ func TestHIDCLIはinspectで実際に使うBLE設定を出す(t *testing.T) {
 		"adapter: hci1\n",
 		"name: Desk Bridge\n",
 		"appearance: keyboard (0x03C1)\n",
+		"input_devices: /dev/input/by-id/usb-Test_Keyboard-event-kbd\n",
 		"service_uuid: " + bluez.HIDServiceUUID + "\n",
 	} {
 		if !bytes.Contains(stdout.Bytes(), []byte(want)) {
@@ -132,6 +177,8 @@ hid:
   appearance: keyboard
   pairable: true
   discoverable: true
+  input_devices:
+    - /dev/input/by-id/usb-Test_Keyboard-event-kbd
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
