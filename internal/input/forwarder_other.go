@@ -8,10 +8,14 @@ import (
 )
 
 type Forwarder struct {
-	Paths []string
-	Log   io.Writer
+	Device string
+	Log    io.Writer
 }
 
-func (forwarder Forwarder) Run(_ context.Context, _ func([]byte) error) error {
+func (forwarder Forwarder) Descriptor() (Descriptor, error) {
+	return Descriptor{}, nil
+}
+
+func (forwarder Forwarder) Run(_ context.Context, _ func(Report) error) error {
 	return nil
 }

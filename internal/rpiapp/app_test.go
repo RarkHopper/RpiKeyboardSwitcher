@@ -272,6 +272,8 @@ targets:
 behavior:
   disconnect_others: true
   reconnect_wait_sec: 0
+hid:
+  hidraw_device: /dev/hidraw0
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
@@ -292,6 +294,8 @@ targets:
   switch:
     name: Switch Named Target
     bluetooth_mac: AA:BB:CC:DD:EE:03
+hid:
+  hidraw_device: /dev/hidraw0
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)

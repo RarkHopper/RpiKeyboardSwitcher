@@ -9,7 +9,6 @@ import (
 
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/bluez"
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/config"
-	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/hidreport"
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/input"
 )
 
@@ -18,7 +17,8 @@ type HIDDaemon interface {
 }
 
 type InputForwarder interface {
-	Run(ctx context.Context, send func([]byte) error) error
+	Descriptor() (input.Descriptor, error)
+	Run(ctx context.Context, send func(input.Report) error) error
 }
 
 type App struct {
@@ -45,11 +45,11 @@ func (app App) Run(args []string) int {
 	switch options.command {
 	case "daemon":
 		if len(options.operands) != 0 {
-			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd-hid [--config path] daemon [--test-text text]")
+			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd-hid [--config path] daemon")
 			return 2
 		}
 
-		return app.daemon(path, options.testText)
+		return app.daemon(path)
 	case "inspect":
 		if len(options.operands) != 0 {
 			_, _ = fmt.Fprintln(app.stderr(), "usage: kbd-hid [--config path] inspect")
@@ -65,7 +65,6 @@ func (app App) Run(args []string) int {
 
 type cliOptions struct {
 	configPath string
-	testText   string
 	command    string
 	operands   []string
 }
@@ -84,15 +83,6 @@ func parseArgs(args []string) (cliOptions, error) {
 			index = next
 		case strings.HasPrefix(arg, "--config="):
 			options.configPath = strings.TrimPrefix(arg, "--config=")
-		case arg == "--test-text":
-			value, next, err := requireFlagValue(args, index, "--test-text")
-			if err != nil {
-				return cliOptions{}, err
-			}
-			options.testText = value
-			index = next
-		case strings.HasPrefix(arg, "--test-text="):
-			options.testText = strings.TrimPrefix(arg, "--test-text=")
 		case strings.HasPrefix(arg, "-"):
 			return cliOptions{}, fmt.Errorf("unknown flag: %s", arg)
 		case options.command == "":
@@ -125,19 +115,20 @@ func resolveConfigPath(path string) string {
 	return config.DefaultRPIConfigPath
 }
 
-func (app App) daemon(configPath string, testText string) int {
+func (app App) daemon(configPath string) int {
 	cfg, err := config.LoadRPI(configPath)
 	if err != nil {
 		_, _ = fmt.Fprintln(app.stderr(), err)
 		return 2
 	}
-	reports, err := testReports(testText)
+	forwarder := app.inputForwarder(cfg)
+	descriptor, err := forwarder.Descriptor()
 	if err != nil {
 		_, _ = fmt.Fprintln(app.stderr(), err)
-		return 2
+		return 1
 	}
 
-	options := app.daemonOptions(configPath, cfg, reports)
+	options := app.daemonOptions(configPath, cfg, descriptor, forwarder)
 	if err := app.daemonRunner().Run(app.context(), options); err != nil {
 		_, _ = fmt.Fprintln(app.stderr(), err)
 		return 1
@@ -158,10 +149,12 @@ func (app App) inspect(configPath string) int {
 	_, _ = fmt.Fprintf(app.stdout(), "appearance: %s (0x%04X)\n", cfg.HID.Appearance, bluez.KeyboardAppearance)
 	_, _ = fmt.Fprintf(app.stdout(), "pairable: %t\n", cfg.HID.PairableEnabled())
 	_, _ = fmt.Fprintf(app.stdout(), "discoverable: %t\n", cfg.HID.DiscoverableEnabled())
-	if len(cfg.HID.InputDevices) == 0 {
-		_, _ = fmt.Fprintf(app.stdout(), "input_devices: %s (default)\n", input.DefaultKeyboardGlob)
+	_, _ = fmt.Fprintf(app.stdout(), "hidraw_device: %s\n", cfg.HID.HIDRawDevice)
+	if descriptor, err := app.inputForwarder(cfg).Descriptor(); err == nil {
+		_, _ = fmt.Fprintf(app.stdout(), "report_map_bytes: %d\n", len(descriptor.ReportMap))
+		_, _ = fmt.Fprintf(app.stdout(), "input_report_ids: %s\n", reportIDsString(descriptor.InputReportIDs))
 	} else {
-		_, _ = fmt.Fprintf(app.stdout(), "input_devices: %s\n", strings.Join(cfg.HID.InputDevices, ", "))
+		_, _ = fmt.Fprintf(app.stdout(), "report_map_error: %v\n", err)
 	}
 	_, _ = fmt.Fprintf(app.stdout(), "gatt_root: %s\n", bluez.AppPath)
 	_, _ = fmt.Fprintf(app.stdout(), "advertisement: %s\n", bluez.AdvertisementPath)
@@ -170,15 +163,24 @@ func (app App) inspect(configPath string) int {
 	return 0
 }
 
-func (app App) daemonOptions(configPath string, cfg config.RPIConfig, reports [][]byte) bluez.DaemonOptions {
+func (app App) daemonOptions(configPath string, cfg config.RPIConfig, descriptor input.Descriptor, forwarder InputForwarder) bluez.DaemonOptions {
 	return bluez.DaemonOptions{
-		Adapter:      cfg.HID.Adapter,
-		Name:         cfg.HID.Name,
-		Appearance:   bluez.KeyboardAppearance,
-		Pairable:     cfg.HID.PairableEnabled(),
-		Discoverable: cfg.HID.DiscoverableEnabled(),
-		TestReports:  reports,
-		InputReports: app.inputForwarder(cfg).Run,
+		Adapter:         cfg.HID.Adapter,
+		Name:            cfg.HID.Name,
+		Appearance:      bluez.KeyboardAppearance,
+		Pairable:        cfg.HID.PairableEnabled(),
+		Discoverable:    cfg.HID.DiscoverableEnabled(),
+		ReportMap:       descriptor.ReportMap,
+		InputReportIDs:  descriptor.InputReportIDs,
+		OutputReportIDs: descriptor.OutputReportIDs,
+		InputReports: func(ctx context.Context, send func(bluez.InputReport) error) error {
+			return forwarder.Run(ctx, func(report input.Report) error {
+				return send(bluez.InputReport{
+					ID:   report.ID,
+					Data: report.Data,
+				})
+			})
+		},
 		OnPeerReady: func(peer bluez.Peer) error {
 			return app.cachePeer(configPath, peer)
 		},
@@ -250,28 +252,28 @@ func targetKey(name string) string {
 	return key
 }
 
-func testReports(text string) ([][]byte, error) {
-	if text == "" {
-		return nil, nil
-	}
-
-	reports, err := hidreport.ReportsForText(text)
-	if err != nil {
-		return nil, err
-	}
-
-	return hidreport.Bytes(reports), nil
-}
-
 func (app App) inputForwarder(cfg config.RPIConfig) InputForwarder {
 	if app.Input != nil {
 		return app.Input
 	}
 
 	return input.Forwarder{
-		Paths: cfg.HID.InputDevices,
-		Log:   app.stderr(),
+		Device: cfg.HID.HIDRawDevice,
+		Log:    app.stderr(),
 	}
+}
+
+func reportIDsString(ids []byte) string {
+	if len(ids) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, fmt.Sprintf("0x%02X", id))
+	}
+
+	return strings.Join(parts, ", ")
 }
 
 func (app App) daemonRunner() HIDDaemon {

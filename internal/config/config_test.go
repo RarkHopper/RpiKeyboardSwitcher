@@ -70,6 +70,8 @@ targets:
   switch:
     name: Laptop
     bluetooth_mac: AA:BB:CC:DD:EE:01
+hid:
+  hidraw_device: /dev/hidraw0
 `)
 
 	if _, err := config.LoadRPI(path); err != nil {
@@ -83,6 +85,8 @@ targets:
   laptop:
     name: Laptop
     bluetooth_mac: aa:bb:cc:dd:ee:02
+hid:
+  hidraw_device: /dev/hidraw0
 `)
 
 	if _, err := config.LoadRPI(path); err == nil {
@@ -91,7 +95,10 @@ targets:
 }
 
 func TestRaspberryPi側設定はHID設定の既定値を補う(t *testing.T) {
-	path := writeConfig(t, `{}`)
+	path := writeConfig(t, `
+hid:
+  hidraw_device: /dev/hidraw0
+`)
 
 	cfg, err := config.LoadRPI(path)
 	if err != nil {
@@ -122,6 +129,7 @@ targets:
     bluetooth_mac: AA:BB:CC:DD:EE:02
 hid:
   appearance: mouse
+  hidraw_device: /dev/hidraw0
 `)
 
 	if _, err := config.LoadRPI(path); err == nil {
@@ -129,28 +137,25 @@ hid:
 	}
 }
 
-func TestRaspberryPi側設定はHID入力デバイスを読める(t *testing.T) {
+func TestRaspberryPi側設定はHIDrawデバイスを読める(t *testing.T) {
 	path := writeConfig(t, `
 hid:
-  input_devices:
-    - /dev/input/by-id/usb-Test_Keyboard-event-kbd
+  hidraw_device: /dev/hidraw0
 `)
 
 	cfg, err := config.LoadRPI(path)
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
-	want := "/dev/input/by-id/usb-Test_Keyboard-event-kbd"
-	if len(cfg.HID.InputDevices) != 1 || cfg.HID.InputDevices[0] != want {
-		t.Fatalf("input_devices = %#v, want [%q]", cfg.HID.InputDevices, want)
+	if cfg.HID.HIDRawDevice != "/dev/hidraw0" {
+		t.Fatalf("hidraw_device = %q, want /dev/hidraw0", cfg.HID.HIDRawDevice)
 	}
 }
 
-func TestRaspberryPi側設定は空のHID入力デバイスを拒否する(t *testing.T) {
+func TestRaspberryPi側設定は空のHIDrawデバイスを拒否する(t *testing.T) {
 	path := writeConfig(t, `
 hid:
-  input_devices:
-    - ""
+  hidraw_device: ""
 `)
 
 	if _, err := config.LoadRPI(path); err == nil {

@@ -61,6 +61,9 @@ type HIDApplication struct {
 	service         *Service
 	characteristics map[dbus.ObjectPath]*Characteristic
 	descriptors     map[dbus.ObjectPath]*Descriptor
+	inputReportIDs  []byte
+	inputReportPath map[byte]dbus.ObjectPath
+	outputReportIDs []byte
 	emitter         emitter
 	subscribed      chan struct{}
 	subscribeOnce   sync.Once
@@ -99,25 +102,54 @@ type HIDAdvertisement struct {
 }
 
 type DaemonOptions struct {
-	Adapter      string
-	Name         string
-	Appearance   uint16
-	Pairable     bool
-	Discoverable bool
-	TestReports  [][]byte
-	InputReports func(context.Context, func([]byte) error) error
-	OnPeerReady  func(Peer) error
-	Log          io.Writer
+	Adapter         string
+	Name            string
+	Appearance      uint16
+	Pairable        bool
+	Discoverable    bool
+	ReportMap       []byte
+	InputReportIDs  []byte
+	OutputReportIDs []byte
+	InputReports    func(context.Context, func(InputReport) error) error
+	OnPeerReady     func(Peer) error
+	Log             io.Writer
 }
 
 type DBusDaemon struct{}
+
+type HIDApplicationOptions struct {
+	ReportMap       []byte
+	InputReportIDs  []byte
+	OutputReportIDs []byte
+}
+
+type InputReport struct {
+	ID   byte
+	Data []byte
+}
 
 type Peer struct {
 	Name         string
 	BluetoothMAC string
 }
 
-func NewHIDApplication() *HIDApplication {
+func NewHIDApplication(options ...HIDApplicationOptions) *HIDApplication {
+	settings := HIDApplicationOptions{
+		ReportMap:      defaultReportMap(),
+		InputReportIDs: []byte{0x00},
+	}
+	if len(options) > 0 {
+		if len(options[0].ReportMap) > 0 {
+			settings.ReportMap = append([]byte(nil), options[0].ReportMap...)
+		}
+		if len(options[0].InputReportIDs) > 0 {
+			settings.InputReportIDs = uniqueReportIDs(options[0].InputReportIDs)
+		}
+		if len(options[0].OutputReportIDs) > 0 {
+			settings.OutputReportIDs = uniqueReportIDs(options[0].OutputReportIDs)
+		}
+	}
+
 	app := &HIDApplication{
 		service: &Service{
 			path:    ServicePath,
@@ -126,17 +158,29 @@ func NewHIDApplication() *HIDApplication {
 		},
 		characteristics: make(map[dbus.ObjectPath]*Characteristic),
 		descriptors:     make(map[dbus.ObjectPath]*Descriptor),
+		inputReportIDs:  append([]byte(nil), settings.InputReportIDs...),
+		inputReportPath: make(map[byte]dbus.ObjectPath, len(settings.InputReportIDs)),
+		outputReportIDs: append([]byte(nil), settings.OutputReportIDs...),
 		subscribed:      make(chan struct{}),
 	}
 
 	app.addCharacteristic(HIDInfoPath, HIDInformationUUID, []string{"read"}, []byte{0x11, 0x01, 0x00, 0x02}, false, false, false)
-	app.addCharacteristic(ReportMapPath, ReportMapUUID, []string{"read"}, reportMap(), false, false, false)
+	app.addCharacteristic(ReportMapPath, ReportMapUUID, []string{"read"}, settings.ReportMap, false, false, false)
 	app.addCharacteristic(ControlPointPath, HIDControlPointUUID, []string{"write-without-response"}, nil, false, true, false)
 	app.addCharacteristic(ProtocolModePath, ProtocolModeUUID, []string{"read", "write-without-response"}, []byte{0x01}, false, true, true)
-	app.addCharacteristic(ReportPath, ReportUUID, []string{"read", "notify"}, make([]byte, 8), true, false, false)
+	for index, reportID := range settings.InputReportIDs {
+		path := inputReportPath(index)
+		app.inputReportPath[reportID] = path
+		app.addCharacteristic(path, ReportUUID, []string{"read", "notify"}, nil, true, false, false)
+		app.addDescriptor(path+"/desc0", ReportReferenceUUID, path, []string{"read"}, []byte{reportID, 0x01})
+	}
+	for index, reportID := range settings.OutputReportIDs {
+		path := outputReportPath(index)
+		app.addCharacteristic(path, ReportUUID, []string{"read", "write", "write-without-response"}, nil, false, true, false)
+		app.addDescriptor(path+"/desc0", ReportReferenceUUID, path, []string{"read"}, []byte{reportID, 0x02})
+	}
 	app.addCharacteristic(BootInputPath, BootKeyboardInputReportUUID, []string{"read", "notify"}, make([]byte, 8), true, false, false)
 	app.addCharacteristic(BootOutputPath, BootKeyboardOutputReportUUID, []string{"read", "write", "write-without-response"}, []byte{0x00}, false, true, false)
-	app.addDescriptor(ReportPath+"/desc0", ReportReferenceUUID, ReportPath, []string{"read"}, []byte{0x00, 0x01})
 
 	return app
 }
@@ -195,10 +239,7 @@ func (app *HIDApplication) SendReports(reports [][]byte) error {
 	defer app.mu.Unlock()
 
 	for _, report := range reports {
-		if len(report) != 8 {
-			return fmt.Errorf("HID keyboard report must be 8 bytes: got %d", len(report))
-		}
-		if err := app.notifyInputLocked(report); err != nil {
+		if err := app.notifyInputLocked(InputReport{ID: app.inputReportIDs[0], Data: report}); err != nil {
 			return err
 		}
 	}
@@ -208,6 +249,13 @@ func (app *HIDApplication) SendReports(reports [][]byte) error {
 
 func (app *HIDApplication) SendReport(report []byte) error {
 	return app.SendReports([][]byte{report})
+}
+
+func (app *HIDApplication) SendInputReport(report InputReport) error {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	return app.notifyInputLocked(report)
 }
 
 func (app *HIDApplication) SendReportsAfterSubscription(ctx context.Context, reports [][]byte) error {
@@ -299,7 +347,11 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 		return err
 	}
 
-	app := NewHIDApplication()
+	app := NewHIDApplication(HIDApplicationOptions{
+		ReportMap:       options.ReportMap,
+		InputReportIDs:  options.InputReportIDs,
+		OutputReportIDs: options.OutputReportIDs,
+	})
 	advertisement := NewHIDAdvertisement(options.Name, options.Appearance)
 	agent := NewAgent(options.Log)
 
@@ -350,7 +402,7 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 	}()
 
 	readyErrors := make(chan error, 1)
-	if len(options.TestReports) > 0 || options.OnPeerReady != nil || options.InputReports != nil {
+	if options.OnPeerReady != nil || options.InputReports != nil {
 		go func() {
 			if err := app.WaitForSubscription(ctx); err != nil {
 				if !errors.Is(err, context.Canceled) {
@@ -369,12 +421,8 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 					return
 				}
 			}
-			if err := app.SendReports(options.TestReports); err != nil {
-				readyErrors <- err
-				return
-			}
 			if options.InputReports != nil {
-				if err := options.InputReports(ctx, app.SendReport); err != nil && !errors.Is(err, context.Canceled) {
+				if err := options.InputReports(ctx, app.SendInputReport); err != nil && !errors.Is(err, context.Canceled) {
 					readyErrors <- err
 				}
 			}
@@ -483,21 +531,59 @@ func (app *HIDApplication) serviceProperties(interfaceName string) (map[string]d
 	return app.service.properties(), true
 }
 
-func (app *HIDApplication) notifyInputLocked(report []byte) error {
-	preferredPath := ReportPath
-	fallbackPath := BootInputPath
-	if protocolMode := app.characteristics[ProtocolModePath]; protocolMode != nil && len(protocolMode.value) > 0 && protocolMode.value[0] == 0x00 {
-		preferredPath = BootInputPath
-		fallbackPath = ReportPath
+func (app *HIDApplication) notifyInputLocked(report InputReport) error {
+	preferredPath, ok := app.inputReportPath[report.ID]
+	if !ok {
+		return nil
+	}
+	fallbackPath := dbus.ObjectPath("")
+	if report.ID == 0x00 && len(report.Data) == 8 {
+		fallbackPath = BootInputPath
+	}
+	if fallbackPath != "" {
+		protocolMode := app.characteristics[ProtocolModePath]
+		if protocolMode != nil && len(protocolMode.value) > 0 && protocolMode.value[0] == 0x00 {
+			preferredPath = BootInputPath
+			fallbackPath = app.inputReportPath[report.ID]
+		}
 	}
 	if app.isNotifyingLocked(preferredPath) {
-		return app.notifyLocked(preferredPath, report)
+		return app.notifyLocked(preferredPath, report.Data)
 	}
-	if app.isNotifyingLocked(fallbackPath) {
-		return app.notifyLocked(fallbackPath, report)
+	if fallbackPath != "" && app.isNotifyingLocked(fallbackPath) {
+		return app.notifyLocked(fallbackPath, report.Data)
 	}
 
 	return nil
+}
+
+func inputReportPath(index int) dbus.ObjectPath {
+	if index == 0 {
+		return ReportPath
+	}
+
+	return dbus.ObjectPath(fmt.Sprintf("%s/report%d", ServicePath, index))
+}
+
+func outputReportPath(index int) dbus.ObjectPath {
+	return dbus.ObjectPath(fmt.Sprintf("%s/output%d", ServicePath, index))
+}
+
+func uniqueReportIDs(ids []byte) []byte {
+	seen := map[byte]bool{}
+	out := make([]byte, 0, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return []byte{0x00}
+	}
+
+	return out
 }
 
 func (app *HIDApplication) isNotifyingLocked(path dbus.ObjectPath) bool {
@@ -660,7 +746,7 @@ func readWithOffset(value []byte, options map[string]dbus.Variant) ([]byte, erro
 	return append([]byte(nil), value[offset:]...), nil
 }
 
-func reportMap() []byte {
+func defaultReportMap() []byte {
 	return []byte{
 		0x05, 0x01,
 		0x09, 0x06,

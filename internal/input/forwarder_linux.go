@@ -4,131 +4,45 @@ package input
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
-	"path/filepath"
-	"sort"
-	"strings"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
-const (
-	eventSync = 0x00
-	eventKey  = 0x01
-
-	syncDropped = 0x03
-
-	// EVIOCGRAB prevents forwarded key events from also reaching the Raspberry Pi console.
-	evIOGrab = 0x40044590
-)
-
 type Forwarder struct {
-	Paths []string
-	Log   io.Writer
+	Device string
+	Log    io.Writer
 }
 
-type inputEvent struct {
-	Time  unix.Timeval
-	Type  uint16
-	Code  uint16
-	Value int32
-}
-
-func (forwarder Forwarder) Run(ctx context.Context, send func([]byte) error) error {
-	paths, err := inputDevicePaths(forwarder.Paths)
+func (forwarder Forwarder) Descriptor() (Descriptor, error) {
+	fd, err := unix.Open(forwarder.Device, unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return err
-	}
-	if len(paths) == 0 {
-		logf(forwarder.Log, "No keyboard input devices found at %s; set hid.input_devices to forward USB keyboard input\n", DefaultKeyboardGlob)
-		return nil
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	errs := make(chan error, len(paths))
-	for _, path := range paths {
-		path := path
-		go func() {
-			errs <- readDevice(ctx, path, send)
-		}()
-	}
-
-	for range paths {
-		select {
-		case <-ctx.Done():
-			return nil
-		case err := <-errs:
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-func inputDevicePaths(patterns []string) ([]string, error) {
-	if len(patterns) == 0 {
-		patterns = []string{DefaultKeyboardGlob}
-	}
-
-	seen := map[string]bool{}
-	paths := make([]string, 0, len(patterns))
-	for _, pattern := range patterns {
-		if strings.ContainsAny(pattern, "*?[") {
-			matches, err := filepath.Glob(pattern)
-			if err != nil {
-				return nil, fmt.Errorf("expand input device path %q: %w", pattern, err)
-			}
-			sort.Strings(matches)
-			for _, match := range matches {
-				if !seen[match] {
-					seen[match] = true
-					paths = append(paths, match)
-				}
-			}
-			continue
-		}
-
-		if !seen[pattern] {
-			seen[pattern] = true
-			paths = append(paths, pattern)
-		}
-	}
-
-	sort.Strings(paths)
-	return paths, nil
-}
-
-func readDevice(ctx context.Context, path string, send func([]byte) error) error {
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
-	if err != nil {
-		return fmt.Errorf("open input device %s: %w", path, err)
+		return Descriptor{}, fmt.Errorf("open hidraw device %s: %w", forwarder.Device, err)
 	}
 	defer func() {
 		_ = unix.Close(fd)
 	}()
-	if err := unix.IoctlSetPointerInt(fd, evIOGrab, 1); err != nil {
-		return fmt.Errorf("grab input device %s: %w", path, err)
+
+	return readDescriptor(fd, forwarder.Device)
+}
+
+func (forwarder Forwarder) Run(ctx context.Context, send func(Report) error) error {
+	fd, err := unix.Open(forwarder.Device, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return fmt.Errorf("open hidraw device %s: %w", forwarder.Device, err)
 	}
 	defer func() {
-		_ = unix.IoctlSetPointerInt(fd, evIOGrab, 0)
+		_ = unix.Close(fd)
 	}()
 
-	var event inputEvent
-	eventSize := int(unsafe.Sizeof(event))
-	typeOffset := uintptr(unsafe.Offsetof(event.Type))
-	codeOffset := uintptr(unsafe.Offsetof(event.Code))
-	valueOffset := uintptr(unsafe.Offsetof(event.Value))
+	descriptor, err := readDescriptor(fd, forwarder.Device)
+	if err != nil {
+		return err
+	}
+	logf(forwarder.Log, "Forwarding HID reports from %s with %d byte report descriptor\n", forwarder.Device, len(descriptor.ReportMap))
 
-	buffer := make([]byte, eventSize*32)
-	state := KeyboardState{}
-
+	buffer := make([]byte, 4096)
 	for {
 		select {
 		case <-ctx.Done():
@@ -141,7 +55,7 @@ func readDevice(ctx context.Context, path string, send func([]byte) error) error
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("poll input device %s: %w", path, err)
+			return fmt.Errorf("poll hidraw device %s: %w", forwarder.Device, err)
 		}
 		if ready == 0 {
 			continue
@@ -152,38 +66,40 @@ func readDevice(ctx context.Context, path string, send func([]byte) error) error
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("read input device %s: %w", path, err)
+			return fmt.Errorf("read hidraw device %s: %w", forwarder.Device, err)
 		}
 		if n == 0 {
-			return fmt.Errorf("input device %s closed", path)
+			return fmt.Errorf("hidraw device %s closed", forwarder.Device)
 		}
 
-		for offset := 0; offset+eventSize <= n; offset += eventSize {
-			record := buffer[offset : offset+eventSize]
-			eventType := binary.NativeEndian.Uint16(record[typeOffset:])
-			eventCode := binary.NativeEndian.Uint16(record[codeOffset:])
-			eventValue := int32(binary.NativeEndian.Uint32(record[valueOffset:]))
-
-			switch eventType {
-			case eventKey:
-				report, changed := state.Apply(eventCode, eventValue)
-				if changed {
-					if err := send(report.Bytes()); err != nil {
-						return err
-					}
-				}
-			case eventSync:
-				if eventCode == syncDropped {
-					report, changed := state.Reset()
-					if changed {
-						if err := send(report.Bytes()); err != nil {
-							return err
-						}
-					}
-				}
-			}
+		report, ok := descriptor.Report(buffer[:n])
+		if !ok {
+			continue
+		}
+		if err := send(report); err != nil {
+			return err
 		}
 	}
+}
+
+func readDescriptor(fd int, device string) (Descriptor, error) {
+	size, err := unix.IoctlRetInt(fd, uint(unix.HIDIOCGRDESCSIZE))
+	if err != nil {
+		return Descriptor{}, fmt.Errorf("read hidraw descriptor size %s: %w", device, err)
+	}
+	if size <= 0 {
+		return Descriptor{}, fmt.Errorf("hidraw device %s returned empty report descriptor", device)
+	}
+
+	raw := unix.HIDRawReportDescriptor{Size: uint32(size)}
+	if err := unix.IoctlHIDGetDesc(fd, &raw); err != nil {
+		return Descriptor{}, fmt.Errorf("read hidraw report descriptor %s: %w", device, err)
+	}
+	if int(raw.Size) > len(raw.Value) {
+		return Descriptor{}, fmt.Errorf("hidraw report descriptor %s is too large: %d bytes", device, raw.Size)
+	}
+
+	return ParseDescriptor(raw.Value[:raw.Size])
 }
 
 func logf(writer io.Writer, format string, args ...any) {
