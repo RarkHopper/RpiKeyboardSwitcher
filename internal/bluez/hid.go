@@ -26,6 +26,7 @@ const (
 	ObjectManagerInterface        = "org.freedesktop.DBus.ObjectManager"
 	PropertiesInterface           = "org.freedesktop.DBus.Properties"
 
+	// Bluetooth SIG Assigned Numbers: https://www.bluetooth.com/specifications/assigned-numbers/
 	HIDServiceUUID               = "00001812-0000-1000-8000-00805f9b34fb"
 	HIDInformationUUID           = "00002a4a-0000-1000-8000-00805f9b34fb"
 	ReportMapUUID                = "00002a4b-0000-1000-8000-00805f9b34fb"
