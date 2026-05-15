@@ -5,7 +5,7 @@
 RpiKeyboardSwitcher is a Go prototype for using a Raspberry Pi as a Bluetooth HID keyboard bridge.
 The Raspberry Pi advertises itself as a BLE keyboard, learns paired target PCs from BlueZ, caches them in its config, and later switches between those cached targets from a short `kbd` command over SSH.
 
-The `kbd-hid` daemon advertises itself as a BLE HID keyboard and forwards key input read from Raspberry Pi Linux input devices after the host subscribes to HID notifications. It can also send fixed test text for the first pairing check.
+The `kbd-hid` daemon advertises itself as a BLE HID keyboard and forwards USB HID reports read from a Raspberry Pi hidraw device after the host subscribes to HID notifications.
 
 ## Commands
 
@@ -20,14 +20,14 @@ The `kbd-hid` daemon advertises itself as a BLE HID keyboard and forwards key in
 | Raspberry Pi | `kbd-rpi`, `kbd-hid` | `/etc/kbd-switch/config.yaml` | Advertises the BLE keyboard, caches confirmed Bluetooth targets, and switches targets. |
 | PC used to run switch commands | `kbd` | `~/.config/kbd-switch/config.yaml` | Knows how to SSH to the Raspberry Pi. It does not store Bluetooth MAC addresses. |
 | PC used as a keyboard target | nothing required for input | OS Bluetooth settings | Pairs with `Rpi Keyboard Switcher` as a normal BLE keyboard. Install `kbd` here only if this PC also runs switch commands. |
-| Wired keyboard | none | none | Plugs into the Raspberry Pi over USB. `kbd-hid` reads key input from Linux input devices. |
+| Wired keyboard | none | none | Plugs into the Raspberry Pi over USB. `kbd-hid` reads HID reports from `/dev/hidraw*`. |
 
 ## Flow
 
 First, learn a target on the Raspberry Pi:
 
 ```text
-sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
+sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml
   -> pair/connect from the target PC in the OS Bluetooth settings
   -> the host subscribes to HID input notifications
   -> kbd-hid reads BlueZ Device1 Address and Alias/Name
@@ -103,7 +103,7 @@ sudo apt-get install -y bluez
 
 If `bluetoothctl list` or `ls /sys/class/bluetooth` does not show `hci0`, check the Raspberry Pi Bluetooth settings before continuing.
 
-`kbd-hid` reads input devices and grabs the target keyboard while it is running so those key events do not also reach the Raspberry Pi console. The manual check uses `sudo kbd-hid ...`, and the systemd unit also runs as root.
+`kbd-hid` reads `/dev/hidraw*`. The manual check uses `sudo kbd-hid ...`, and the systemd unit also runs as root.
 
 Install the binaries under `/usr/local/bin`.
 
@@ -134,7 +134,7 @@ hid:
   appearance: keyboard
   pairable: true
   discoverable: true
-  input_devices: []
+  hidraw_device: /dev/hidraw0
 ```
 
 After a target is learned, the file will contain entries like this:
@@ -158,7 +158,7 @@ Fields:
 - `hid.appearance`: HID appearance. Currently only `keyboard` is supported.
 - `hid.pairable`: when true or omitted, allow incoming pairing requests.
 - `hid.discoverable`: when true or omitted, make the adapter discoverable.
-- `hid.input_devices`: Linux input devices to read. When empty or omitted, `/dev/input/by-id/*-event-kbd` is used. To read only a specific keyboard, set one or more `/dev/input/by-id/...-event-kbd` paths.
+- `hid.hidraw_device`: hidraw device to read. Set the `/dev/hidrawN` path for the USB keyboard.
 
 Target names may contain only letters, digits, `_`, `-`, and `.`. Unknown YAML fields are rejected.
 
@@ -170,32 +170,32 @@ Check the settings read by `kbd-hid` before touching Bluetooth:
 kbd-hid inspect --config /etc/kbd-switch/config.yaml
 ```
 
-Plug the USB keyboard into the Raspberry Pi and check the input device name:
+Plug the USB keyboard into the Raspberry Pi and check the hidraw device name:
 
 ```sh
-ls -l /dev/input/by-id/*-event-kbd
+ls -l /dev/hidraw*
+udevadm info --query=all --name=/dev/hidraw0
 ```
 
-If more than one keyboard exists and you want to pin the source, set `hid.input_devices`.
+Set `hid.hidraw_device` to the hidraw device that belongs to the USB keyboard. Use `ID_INPUT_KEYBOARD=1` and `HID_NAME` from `udevadm info` to identify it.
 
 ```yaml
 hid:
-  input_devices:
-    - /dev/input/by-id/usb-Example_Keyboard-event-kbd
+  hidraw_device: /dev/hidraw0
 ```
 
 ### 4. Learn A Target
 
-For the first check, start `kbd-hid` by hand instead of systemd and verify pairing plus test input from a target PC.
+For the first check, start `kbd-hid` by hand instead of systemd and verify pairing plus USB keyboard input from a target PC.
 
 ```sh
 sudo systemctl stop kbd-hid.service 2>/dev/null || true
-sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
+sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml
 ```
 
 This command keeps running. On the target PC, open a text editor or another text field, then open the OS Bluetooth settings and pair with `Rpi Keyboard Switcher`. Once the host subscribes to HID notifications, `kbd-hid` reads the connected BlueZ device and adds it to `targets`. If the same Bluetooth MAC address is already present, the existing target key and name are kept.
 
-When the target PC receives `a` and `/etc/kbd-switch/config.yaml` gains a `targets` entry, also confirm that USB keyboard input reaches the target PC. Then stop the command with `Ctrl-C`. You can edit the generated target key and display name at this point. Leave the Bluetooth MAC address unchanged unless you know it is wrong.
+When `/etc/kbd-switch/config.yaml` gains a `targets` entry and USB keyboard input reaches the target PC, stop the command with `Ctrl-C`. You can edit the generated target key and display name at this point. Leave the Bluetooth MAC address unchanged unless you know it is wrong.
 
 ### 5. Run kbd-hid Under systemd
 
