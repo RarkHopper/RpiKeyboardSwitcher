@@ -4,7 +4,7 @@
 
 RpiKeyboardSwitcher は、Raspberry Pi を Bluetooth HID キーボードの橋渡しとして使うための Go 製プロトタイプです。Raspberry Pi が BLE キーボードとして広告し、接続できたPCを BlueZ から読み取り、設定ファイルへ保存します。以後は PC 側の短い `kbd` コマンドから SSH 経由で Raspberry Pi に切替を指示します。
 
-USB キーボード入力の中継はまだ未実装です。現在の `kbd-hid` デーモンは BLE HID キーボードとして広告し、ホストが HID 通知を有効にした後に固定のテスト文字を送れます。
+`kbd-hid` デーモンは BLE HID キーボードとして広告し、ホストが HID 通知を有効にした後に Raspberry Pi の Linux 入力デバイスから読んだキー入力を送ります。初回確認用に固定のテスト文字も送れます。
 
 ## コマンド
 
@@ -19,7 +19,7 @@ USB キーボード入力の中継はまだ未実装です。現在の `kbd-hid`
 | Raspberry Pi | `kbd-rpi`, `kbd-hid` | `/etc/kbd-switch/config.yaml` | BLE キーボードを広告し、疎通した Bluetooth 接続先を `targets` に保存し、切替を行います。 |
 | 切替コマンドを打つPC | `kbd` | `~/.config/kbd-switch/config.yaml` | Raspberry Pi への SSH 接続方法だけを持ちます。Bluetooth MAC アドレスは持ちません。 |
 | キーボード入力を受けるPC | 入力を受けるだけなら不要 | OS の Bluetooth 設定 | `Rpi Keyboard Switcher` とペアリングし、普通の BLE キーボードとして入力を受けます。このPCから切替も行うなら `kbd` も入れます。 |
-| 有線キーボード | なし | なし | USB で Raspberry Pi に接続します。入力中継は次の段階です。 |
+| 有線キーボード | なし | なし | USB で Raspberry Pi に接続します。`kbd-hid` が Linux 入力デバイスからキー入力を読みます。 |
 
 ## 処理の流れ
 
@@ -31,6 +31,7 @@ sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
   -> ホストが HID 入力通知を有効にする
   -> kbd-hid が BlueZ Device1 の Address と Alias/Name を読む
   -> /etc/kbd-switch/config.yaml に targets.<生成名> を保存
+  -> Raspberry Pi の USB キーボード入力を BLE HID report として送る
 ```
 
 その後、PC 側から切り替えます。
@@ -48,6 +49,13 @@ kbd switch laptop
 
 ここでは、開発PCでビルドしてから Raspberry Pi と切替コマンドを打つPCへ配置する流れで進めます。例では Raspberry Pi の SSH 接続先を `pi@rpi-kbd.local` とします。
 
+### 0. 配線
+
+- USB キーボードを Raspberry Pi の USB ポートに挿します。
+- Raspberry Pi は電源を入れ、Bluetooth を有効にします。
+- キーボード入力を受けるPCでは、Bluetooth 設定画面とテキストエディタなどの入力欄を開けるようにしておきます。
+- 切替コマンドを打つPCから Raspberry Pi へ SSH できるようにしておきます。このPCは、キーボード入力を受けるPCと同じでも別でも構いません。
+
 ### 1. ビルド
 
 開発PCで3つのバイナリを作ります。
@@ -56,7 +64,7 @@ kbd switch laptop
 make build
 ```
 
-既定では、PC 側の `kbd` は開発PCと同じ OS/CPU 向け、Raspberry Pi 側の `kbd-rpi` と `kbd-hid` は 64-bit Raspberry Pi OS 向けに `linux/arm64` で作ります。
+既定では、PC 側の `kbd` は開発PCと同じ OS/CPU 向け、Raspberry Pi 側の `kbd-rpi` と `kbd-hid` は 64-bit Raspberry Pi OS 向けに `linux/arm64` で作ります。開発PCとは別のPCで `kbd` を使う場合は、そのPC上で `make build` を実行するか、`LOCAL_GOOS` と `LOCAL_GOARCH` をそのPCに合わせて指定します。
 
 32-bit Raspberry Pi OS 向けに作る場合は `RPI_GOARCH=arm` を渡します。
 
@@ -80,7 +88,9 @@ Raspberry Pi では BlueZ と SSH を使います。Bluetooth アダプタ名は
 
 ```sh
 command -v bluetoothctl
+sudo systemctl enable --now bluetooth.service
 systemctl is-active bluetooth.service
+bluetoothctl list
 ls /sys/class/bluetooth
 ```
 
@@ -89,10 +99,11 @@ ls /sys/class/bluetooth
 ```sh
 sudo apt-get update
 sudo apt-get install -y bluez
-sudo systemctl enable --now bluetooth.service
 ```
 
-`ls /sys/class/bluetooth` で `hci0` が出ない場合は、Raspberry Pi 側で Bluetooth が無効になっていないかを先に確認します。
+`bluetoothctl list` または `ls /sys/class/bluetooth` で `hci0` が出ない場合は、Raspberry Pi 側で Bluetooth が無効になっていないかを先に確認します。
+
+`kbd-hid` は入力デバイスを読み取り、実行中は対象キーボードを Raspberry Pi の通常入力から外します。手動確認では `sudo kbd-hid ...` で実行し、systemd unit も root で起動します。
 
 バイナリを `/usr/local/bin` に置きます。
 
@@ -123,6 +134,7 @@ hid:
   appearance: keyboard
   pairable: true
   discoverable: true
+  input_devices: []
 ```
 
 接続先が保存されると、次のような項目が追加されます。
@@ -146,6 +158,7 @@ targets:
 - `hid.appearance`: HID の appearance。現在は `keyboard` のみ対応しています。
 - `hid.pairable`: true または未指定なら、ペアリング要求を受け付けます。
 - `hid.discoverable`: true または未指定なら、アダプタを discoverable にします。
+- `hid.input_devices`: 読み取る Linux 入力デバイス。空または未指定なら `/dev/input/by-id/*-event-kbd` を使います。特定のキーボードだけ読む場合は `/dev/input/by-id/...-event-kbd` を指定します。
 
 接続先名に使える文字は英数字、`_`、`-`、`.` だけです。未知の YAML フィールドはエラーにします。
 
@@ -157,6 +170,20 @@ Bluetooth に触る前に、`kbd-hid` が読む設定を確認します。
 kbd-hid inspect --config /etc/kbd-switch/config.yaml
 ```
 
+USB キーボードを Raspberry Pi に挿し、入力デバイス名を確認します。
+
+```sh
+ls -l /dev/input/by-id/*-event-kbd
+```
+
+複数のキーボードがあり、読む対象を固定したい場合は `hid.input_devices` に書きます。
+
+```yaml
+hid:
+  input_devices:
+    - /dev/input/by-id/usb-Example_Keyboard-event-kbd
+```
+
 ### 4. 接続先を覚えさせる
 
 初回は systemd ではなく手動で起動し、対象PCとのペアリングとテスト入力を確認します。
@@ -166,9 +193,9 @@ sudo systemctl stop kbd-hid.service 2>/dev/null || true
 sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
 ```
 
-このコマンドは起動したまま待ちます。対象PCのOS Bluetooth設定を開き、`Rpi Keyboard Switcher` とペアリングします。ホストが HID 通知を有効にすると、`kbd-hid` が BlueZ の接続済みデバイスを読み取り、`targets` に保存します。同じ Bluetooth MAC アドレスがすでに保存済みなら、既存の接続先名と表示名を保ちます。
+このコマンドは起動したまま待ちます。対象PCでテキストエディタなどの入力欄を開いてから、OS Bluetooth設定で `Rpi Keyboard Switcher` とペアリングします。ホストが HID 通知を有効にすると、`kbd-hid` が BlueZ の接続済みデバイスを読み取り、`targets` に保存します。同じ Bluetooth MAC アドレスがすでに保存済みなら、既存の接続先名と表示名を保ちます。
 
-対象PCで `a` が入力され、Raspberry Pi 側の `/etc/kbd-switch/config.yaml` に `targets` が増えたら、`Ctrl-C` で止めます。接続先名や表示名は、この時点で編集できます。Bluetooth MAC アドレスは通常そのままにします。
+対象PCで `a` が入力され、Raspberry Pi 側の `/etc/kbd-switch/config.yaml` に `targets` が増えたら、USB キーボードの入力も対象PCへ届くことを確認します。確認後は `Ctrl-C` で止めます。接続先名や表示名は、この時点で編集できます。Bluetooth MAC アドレスは通常そのままにします。
 
 ### 5. systemd で常駐させる
 
@@ -181,9 +208,11 @@ sudo systemctl enable --now kbd-hid.service
 sudo journalctl -u kbd-hid.service -f
 ```
 
+ログを確認できたら `Ctrl-C` で `journalctl` だけを止めます。`kbd-hid.service` は動き続けます。
+
 ### 6. 切替コマンドを打つPCへ配置
 
-Raspberry Pi のシェルから `exit` で戻り、切替コマンドを打つPCへ `kbd` を置きます。
+Raspberry Pi のシェルから `exit` で戻ります。開発PCを切替コマンドを打つPCとして使う場合は、`kbd` を PATH の通った場所に置きます。
 
 ```sh
 mkdir -p ~/.local/bin
@@ -244,17 +273,31 @@ Raspberry Pi 側の state の既定パスは `/run/kbd-switch/state.json` です
 
 ## 補完
 
+切替コマンドを打つPCで `kbd` の補完を読み込みます。
+
 zsh:
 
 ```sh
 eval "$(kbd completion zsh)"
-eval "$(kbd-rpi completion zsh)"
 ```
 
 bash:
 
 ```sh
 eval "$(kbd completion bash)"
+```
+
+Raspberry Pi 側で `kbd-rpi` を直接使う場合は、Raspberry Pi のシェルで `kbd-rpi` の補完を読み込みます。
+
+zsh:
+
+```sh
+eval "$(kbd-rpi completion zsh)"
+```
+
+bash:
+
+```sh
 eval "$(kbd-rpi completion bash)"
 ```
 
@@ -262,9 +305,7 @@ eval "$(kbd-rpi completion bash)"
 
 ## セキュリティ
 
-Raspberry Pi はキー入力の経路上に置かれます。信頼できない Raspberry Pi を使うと、キー入力の読み取り、保存、変更、注入が可能になります。業務PCや管理対象PCでは、所有者または管理者の許可なしに使わないでください。
-
-入力ログ保存は初期実装に含めず、標準では無効のままにします。
+Raspberry Pi はキー入力の経路上に置かれます。信頼できない Raspberry Pi を使うと、キー入力の読み取り、変更、注入が可能になります。業務PCや管理対象PCでは、所有者または管理者の許可なしに使わないでください。
 
 ## 開発
 

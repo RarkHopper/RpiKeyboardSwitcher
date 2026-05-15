@@ -5,7 +5,7 @@
 RpiKeyboardSwitcher is a Go prototype for using a Raspberry Pi as a Bluetooth HID keyboard bridge.
 The Raspberry Pi advertises itself as a BLE keyboard, learns paired target PCs from BlueZ, caches them in its config, and later switches between those cached targets from a short `kbd` command over SSH.
 
-USB keyboard input forwarding is not implemented yet. The current `kbd-hid` daemon can advertise a BLE HID keyboard and send fixed test text after the host subscribes to HID notifications.
+The `kbd-hid` daemon advertises itself as a BLE HID keyboard and forwards key input read from Raspberry Pi Linux input devices after the host subscribes to HID notifications. It can also send fixed test text for the first pairing check.
 
 ## Commands
 
@@ -20,7 +20,7 @@ USB keyboard input forwarding is not implemented yet. The current `kbd-hid` daem
 | Raspberry Pi | `kbd-rpi`, `kbd-hid` | `/etc/kbd-switch/config.yaml` | Advertises the BLE keyboard, caches confirmed Bluetooth targets, and switches targets. |
 | PC used to run switch commands | `kbd` | `~/.config/kbd-switch/config.yaml` | Knows how to SSH to the Raspberry Pi. It does not store Bluetooth MAC addresses. |
 | PC used as a keyboard target | nothing required for input | OS Bluetooth settings | Pairs with `Rpi Keyboard Switcher` as a normal BLE keyboard. Install `kbd` here only if this PC also runs switch commands. |
-| Wired keyboard | none | none | Plugs into the Raspberry Pi over USB. Input forwarding is a later step. |
+| Wired keyboard | none | none | Plugs into the Raspberry Pi over USB. `kbd-hid` reads key input from Linux input devices. |
 
 ## Flow
 
@@ -32,6 +32,7 @@ sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
   -> the host subscribes to HID input notifications
   -> kbd-hid reads BlueZ Device1 Address and Alias/Name
   -> kbd-hid saves targets.<generated-name> in /etc/kbd-switch/config.yaml
+  -> kbd-hid forwards Raspberry Pi USB keyboard input as BLE HID reports
 ```
 
 Then switch to that target from a PC:
@@ -49,6 +50,13 @@ The generated target key and display name are meant to be edited by the user. Th
 
 These steps build on a development PC, then place files on the Raspberry Pi and on the PC that runs switch commands. The examples use `pi@rpi-kbd.local` as the Raspberry Pi SSH target.
 
+### 0. Wiring
+
+- Plug the USB keyboard into a Raspberry Pi USB port.
+- Power on the Raspberry Pi and enable Bluetooth.
+- On the PC that receives keyboard input, have the Bluetooth settings and a text editor or another text field ready.
+- Make sure the PC that runs switch commands can SSH to the Raspberry Pi. This PC may be the same as the input target PC or a separate one.
+
 ### 1. Build
 
 Build the three binaries on the development PC.
@@ -57,7 +65,7 @@ Build the three binaries on the development PC.
 make build
 ```
 
-By default, `kbd` is built for the development PC OS/CPU, while `kbd-rpi` and `kbd-hid` are built for 64-bit Raspberry Pi OS as `linux/arm64`.
+By default, `kbd` is built for the development PC OS/CPU, while `kbd-rpi` and `kbd-hid` are built for 64-bit Raspberry Pi OS as `linux/arm64`. If another PC will run `kbd`, run `make build` on that PC or set `LOCAL_GOOS` and `LOCAL_GOARCH` for that PC.
 
 For 32-bit Raspberry Pi OS, pass `RPI_GOARCH=arm`.
 
@@ -80,7 +88,9 @@ The Raspberry Pi needs BlueZ and SSH. The Bluetooth adapter is usually named `hc
 
 ```sh
 command -v bluetoothctl
+sudo systemctl enable --now bluetooth.service
 systemctl is-active bluetooth.service
+bluetoothctl list
 ls /sys/class/bluetooth
 ```
 
@@ -89,10 +99,11 @@ If `bluetoothctl` is missing, install BlueZ on the Raspberry Pi.
 ```sh
 sudo apt-get update
 sudo apt-get install -y bluez
-sudo systemctl enable --now bluetooth.service
 ```
 
-If `ls /sys/class/bluetooth` does not show `hci0`, check the Raspberry Pi Bluetooth settings before continuing.
+If `bluetoothctl list` or `ls /sys/class/bluetooth` does not show `hci0`, check the Raspberry Pi Bluetooth settings before continuing.
+
+`kbd-hid` reads input devices and grabs the target keyboard while it is running so those key events do not also reach the Raspberry Pi console. The manual check uses `sudo kbd-hid ...`, and the systemd unit also runs as root.
 
 Install the binaries under `/usr/local/bin`.
 
@@ -123,6 +134,7 @@ hid:
   appearance: keyboard
   pairable: true
   discoverable: true
+  input_devices: []
 ```
 
 After a target is learned, the file will contain entries like this:
@@ -146,6 +158,7 @@ Fields:
 - `hid.appearance`: HID appearance. Currently only `keyboard` is supported.
 - `hid.pairable`: when true or omitted, allow incoming pairing requests.
 - `hid.discoverable`: when true or omitted, make the adapter discoverable.
+- `hid.input_devices`: Linux input devices to read. When empty or omitted, `/dev/input/by-id/*-event-kbd` is used. To read only a specific keyboard, set one or more `/dev/input/by-id/...-event-kbd` paths.
 
 Target names may contain only letters, digits, `_`, `-`, and `.`. Unknown YAML fields are rejected.
 
@@ -157,6 +170,20 @@ Check the settings read by `kbd-hid` before touching Bluetooth:
 kbd-hid inspect --config /etc/kbd-switch/config.yaml
 ```
 
+Plug the USB keyboard into the Raspberry Pi and check the input device name:
+
+```sh
+ls -l /dev/input/by-id/*-event-kbd
+```
+
+If more than one keyboard exists and you want to pin the source, set `hid.input_devices`.
+
+```yaml
+hid:
+  input_devices:
+    - /dev/input/by-id/usb-Example_Keyboard-event-kbd
+```
+
 ### 4. Learn A Target
 
 For the first check, start `kbd-hid` by hand instead of systemd and verify pairing plus test input from a target PC.
@@ -166,9 +193,9 @@ sudo systemctl stop kbd-hid.service 2>/dev/null || true
 sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
 ```
 
-This command keeps running. On the target PC, open the OS Bluetooth settings and pair with `Rpi Keyboard Switcher`. Once the host subscribes to HID notifications, `kbd-hid` reads the connected BlueZ device and adds it to `targets`. If the same Bluetooth MAC address is already present, the existing target key and name are kept.
+This command keeps running. On the target PC, open a text editor or another text field, then open the OS Bluetooth settings and pair with `Rpi Keyboard Switcher`. Once the host subscribes to HID notifications, `kbd-hid` reads the connected BlueZ device and adds it to `targets`. If the same Bluetooth MAC address is already present, the existing target key and name are kept.
 
-When the target PC receives `a` and `/etc/kbd-switch/config.yaml` gains a `targets` entry, stop the command with `Ctrl-C`. You can edit the generated target key and display name at this point. Leave the Bluetooth MAC address unchanged unless you know it is wrong.
+When the target PC receives `a` and `/etc/kbd-switch/config.yaml` gains a `targets` entry, also confirm that USB keyboard input reaches the target PC. Then stop the command with `Ctrl-C`. You can edit the generated target key and display name at this point. Leave the Bluetooth MAC address unchanged unless you know it is wrong.
 
 ### 5. Run kbd-hid Under systemd
 
@@ -181,9 +208,11 @@ sudo systemctl enable --now kbd-hid.service
 sudo journalctl -u kbd-hid.service -f
 ```
 
+After checking the logs, press `Ctrl-C` to stop only `journalctl`. `kbd-hid.service` keeps running.
+
 ### 6. Install The PC Command
 
-Exit the Raspberry Pi shell, then install `kbd` on the PC that runs switch commands.
+Exit the Raspberry Pi shell. If the development PC is also the PC that runs switch commands, install `kbd` somewhere on PATH.
 
 ```sh
 mkdir -p ~/.local/bin
@@ -244,17 +273,31 @@ The default Raspberry Pi state path is `/run/kbd-switch/state.json`. Set `KBD_RP
 
 ## Tab Completion
 
+Load `kbd` completion on the PC that runs switch commands.
+
 For zsh:
 
 ```sh
 eval "$(kbd completion zsh)"
-eval "$(kbd-rpi completion zsh)"
 ```
 
 For bash:
 
 ```sh
 eval "$(kbd completion bash)"
+```
+
+If you use `kbd-rpi` directly on the Raspberry Pi, load `kbd-rpi` completion in the Raspberry Pi shell.
+
+For zsh:
+
+```sh
+eval "$(kbd-rpi completion zsh)"
+```
+
+For bash:
+
+```sh
 eval "$(kbd-rpi completion bash)"
 ```
 
@@ -262,9 +305,7 @@ Completion candidates are read on each completion request. `kbd` asks the Raspbe
 
 ## Security
 
-The Raspberry Pi sits in the key input path. A compromised or untrusted Raspberry Pi could read, store, modify, or inject key input. Do not use this with a work PC or managed PC without approval from the owner or administrator.
-
-Input logging is not part of the initial implementation and should stay off by default.
+The Raspberry Pi sits in the key input path. A compromised or untrusted Raspberry Pi could read, modify, or inject key input. Do not use this with a work PC or managed PC without approval from the owner or administrator.
 
 ## Development
 
