@@ -1,6 +1,6 @@
 .PHONY: fmt lint lint-config test check
 
-GOLANGCI_LINT := go tool -modfile=golangci-lint.mod golangci-lint
+GOLANGCI_LINT := go tool golangci-lint
 GO_FILES := $(shell find . -name '*.go' -not -path './.git/*')
 
 fmt:
