@@ -1,6 +1,7 @@
-.PHONY: all clean build fmt fmt-check lint lint-config vet test race-test check mod-check script-check python-fmt python-check python-runtime-check vagrant-check vagrant-utm-plugin cuse-check ci e2e
+.PHONY: all clean build fmt fmt-check lint lint-config vet test race-test check mod-check script-check python-fmt python-check python-runtime-check vagrant-check packer-utm-plugin vagrant-utm-plugin cuse-check ci e2e
 
 GOLANGCI_LINT := go tool golangci-lint
+PACKER ?= packer
 VAGRANT ?= vagrant
 LOCAL_GOOS ?= $(shell go env GOOS)
 LOCAL_GOARCH ?= $(shell go env GOARCH)
@@ -11,10 +12,11 @@ UV ?= uv
 TOOLS_PYTHON ?= 3.12
 TOOLS_DIR := tools
 TOOLS_UV := $(UV) --project $(TOOLS_DIR) --directory $(TOOLS_DIR)
-SHELL_SCRIPTS := scripts/hid-e2e.sh scripts/install-vagrant-utm-plugin.sh
+SHELL_SCRIPTS := scripts/hid-e2e.sh scripts/install-packer-utm-plugin.sh scripts/install-vagrant-utm-plugin.sh scripts/provision-e2e-vm.sh
 PYTHON_TOOLS := hci-proxy.py bluez-agent.py bluez-pair.py
 PYTHON_SOURCES := $(PYTHON_TOOLS) lib stubs
 CUSE_TOOL := tools/hidraw-cuse.c
+PACKER_UTM_PLUGIN_STAMP ?= dist/packer/.packer-utm-plugin-v4.0.0.installed
 
 all: build
 
@@ -75,6 +77,13 @@ python-runtime-check:
 
 vagrant-check:
 	ruby -c Vagrantfile
+
+$(PACKER_UTM_PLUGIN_STAMP): scripts/install-packer-utm-plugin.sh
+	PACKER=$(PACKER) scripts/install-packer-utm-plugin.sh
+	mkdir -p $(dir $@)
+	touch $@
+
+packer-utm-plugin: $(PACKER_UTM_PLUGIN_STAMP)
 
 vagrant-utm-plugin:
 	VAGRANT=$(VAGRANT) scripts/install-vagrant-utm-plugin.sh
