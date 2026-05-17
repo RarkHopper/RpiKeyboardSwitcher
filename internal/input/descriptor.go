@@ -1,6 +1,16 @@
 package input
 
-import "fmt"
+import "errors"
+
+var (
+	errEmptyReportDescriptor     = errors.New("HID report descriptor is empty")
+	errTruncatedLongItem         = errors.New("HID long item is truncated")
+	errTruncatedLongItemPayload  = errors.New("HID long item payload is truncated")
+	errTruncatedShortItemPayload = errors.New("HID short item payload is truncated")
+	errInvalidReportIDSize       = errors.New("HID report ID item must be one byte")
+	errZeroReportID              = errors.New("HID report ID must not be zero")
+	errNoInputReports            = errors.New("HID report descriptor has no input reports")
+)
 
 type Descriptor struct {
 	ReportMap       []byte
@@ -16,7 +26,7 @@ type Report struct {
 
 func ParseDescriptor(reportMap []byte) (Descriptor, error) {
 	if len(reportMap) == 0 {
-		return Descriptor{}, fmt.Errorf("HID report descriptor is empty")
+		return Descriptor{}, errEmptyReportDescriptor
 	}
 
 	descriptor := Descriptor{
@@ -31,12 +41,12 @@ func ParseDescriptor(reportMap []byte) (Descriptor, error) {
 		index++
 		if prefix == 0xfe {
 			if index+2 > len(reportMap) {
-				return Descriptor{}, fmt.Errorf("HID long item is truncated")
+				return Descriptor{}, errTruncatedLongItem
 			}
 			size := int(reportMap[index])
 			index += 2
 			if index+size > len(reportMap) {
-				return Descriptor{}, fmt.Errorf("HID long item payload is truncated")
+				return Descriptor{}, errTruncatedLongItemPayload
 			}
 			index += size
 			continue
@@ -49,14 +59,17 @@ func ParseDescriptor(reportMap []byte) (Descriptor, error) {
 		itemType := (prefix >> 2) & 0x03
 		tag := (prefix >> 4) & 0x0f
 		if index+size > len(reportMap) {
-			return Descriptor{}, fmt.Errorf("HID short item payload is truncated")
+			return Descriptor{}, errTruncatedShortItemPayload
 		}
 		value := reportMap[index : index+size]
 		index += size
 
 		if itemType == 1 && tag == 8 {
 			if len(value) != 1 {
-				return Descriptor{}, fmt.Errorf("HID report ID item must be one byte")
+				return Descriptor{}, errInvalidReportIDSize
+			}
+			if value[0] == 0x00 {
+				return Descriptor{}, errZeroReportID
 			}
 			reportID = value[0]
 			descriptor.UsesReportID = true
@@ -73,7 +86,7 @@ func ParseDescriptor(reportMap []byte) (Descriptor, error) {
 	}
 
 	if len(descriptor.InputReportIDs) == 0 {
-		return Descriptor{}, fmt.Errorf("HID report descriptor has no input reports")
+		return Descriptor{}, errNoInputReports
 	}
 
 	return descriptor, nil

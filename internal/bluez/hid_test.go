@@ -165,6 +165,25 @@ func Test可変長reportを通知する(t *testing.T) {
 	}
 }
 
+func Test未知のInputReportIDはエラーを返す(t *testing.T) {
+	app := NewHIDApplication(HIDApplicationOptions{
+		ReportMap:      []byte{0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x85, 0x02, 0x81, 0x02, 0xc0},
+		InputReportIDs: []byte{0x02},
+	})
+	emitter := &fakeEmitter{}
+	app.SetEmitter(emitter)
+
+	if err := app.characteristics[ReportPath].StartNotify(); err != nil {
+		t.Fatalf("StartNotify err = %v, want nil", err)
+	}
+	if err := app.SendInputReport(InputReport{ID: 0x03, Data: []byte{0x11}}); err == nil {
+		t.Fatal("SendInputReport err = nil, want error")
+	}
+	if len(emitter.signals) != 0 {
+		t.Fatalf("signals = %#v, want none", emitter.signals)
+	}
+}
+
 func TestBootProtocolではBootInputへだけreportを送る(t *testing.T) {
 	app := NewHIDApplication()
 	emitter := &fakeEmitter{}

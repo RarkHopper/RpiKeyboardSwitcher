@@ -52,6 +52,20 @@ const (
 	KeyboardAppearance uint16 = 0x03c1
 )
 
+var (
+	errUnknownInputReportID            = errors.New("unknown input report ID")
+	errConnectedPeerNotFound           = errors.New("connected Bluetooth device was not found")
+	errMultipleConnectedPeers          = errors.New("multiple connected Bluetooth devices were found")
+	errMissingNotifyCharacteristic     = errors.New("missing notify characteristic")
+	errCharacteristicNotWritable       = errors.New("characteristic is not writable")
+	errProtocolModeSize                = errors.New("protocol mode must be one byte")
+	errProtocolModeValue               = errors.New("protocol mode must be 0 or 1")
+	errCharacteristicNotifyUnsupported = errors.New("characteristic does not support notify")
+	errDescriptorNotWritable           = errors.New("descriptor is not writable")
+	errReadOffsetBeyondValue           = errors.New("offset is beyond value length")
+	errMissingBluetoothDeviceProperty  = errors.New("missing Bluetooth device property")
+)
+
 type emitter interface {
 	Emit(path dbus.ObjectPath, name string, values ...any) error
 }
@@ -232,7 +246,7 @@ func (app *HIDApplication) WaitForSubscription(ctx context.Context) error {
 	case <-app.subscribed:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("wait for HID subscription: %w", ctx.Err())
 	}
 }
 
@@ -275,10 +289,10 @@ func (app *HIDApplication) Export(conn *dbus.Conn) error {
 	app.SetEmitter(conn)
 
 	if err := conn.Export(app, AppPath, ObjectManagerInterface); err != nil {
-		return err
+		return fmt.Errorf("export HID object manager: %w", err)
 	}
 	if err := conn.ExportMethodTable(map[string]any{}, ServicePath, GATTServiceInterface); err != nil {
-		return err
+		return fmt.Errorf("export HID service method table: %w", err)
 	}
 	if err := exportProperties(conn, ServicePath, app.serviceProperties); err != nil {
 		return err
@@ -286,7 +300,7 @@ func (app *HIDApplication) Export(conn *dbus.Conn) error {
 
 	for path, characteristic := range app.characteristics {
 		if err := conn.Export(characteristic, path, GATTCharacteristicInterface); err != nil {
-			return err
+			return fmt.Errorf("export HID characteristic %s: %w", path, err)
 		}
 		if err := exportProperties(conn, path, characteristic.propertiesForInterface); err != nil {
 			return err
@@ -294,7 +308,7 @@ func (app *HIDApplication) Export(conn *dbus.Conn) error {
 	}
 	for path, descriptor := range app.descriptors {
 		if err := conn.Export(descriptor, path, GATTDescriptorInterface); err != nil {
-			return err
+			return fmt.Errorf("export HID descriptor %s: %w", path, err)
 		}
 		if err := exportProperties(conn, path, descriptor.propertiesForInterface); err != nil {
 			return err
@@ -315,13 +329,13 @@ func (advertisement *HIDAdvertisement) Properties() map[string]dbus.Variant {
 	return props
 }
 
-func (advertisement *HIDAdvertisement) Release() *dbus.Error {
+func (*HIDAdvertisement) Release() *dbus.Error {
 	return nil
 }
 
 func (advertisement *HIDAdvertisement) Export(conn *dbus.Conn) error {
 	if err := conn.Export(advertisement, AdvertisementPath, LEAdvertisementInterface); err != nil {
-		return err
+		return fmt.Errorf("export HID advertisement: %w", err)
 	}
 
 	return exportProperties(conn, AdvertisementPath, func(interfaceName string) (map[string]dbus.Variant, bool) {
@@ -338,16 +352,16 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 
 	conn, err := dbus.SystemBusPrivate()
 	if err != nil {
-		return err
+		return fmt.Errorf("connect to system bus: %w", err)
 	}
 	defer func() {
 		_ = conn.Close()
 	}()
 	if err := conn.Auth(nil); err != nil {
-		return err
+		return fmt.Errorf("authenticate system bus: %w", err)
 	}
 	if err := conn.Hello(); err != nil {
-		return err
+		return fmt.Errorf("send system bus hello: %w", err)
 	}
 
 	app := NewHIDApplication(HIDApplicationOptions{
@@ -371,13 +385,13 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 	adapterPath := dbus.ObjectPath("/org/bluez/" + options.Adapter)
 	adapter := conn.Object("org.bluez", adapterPath)
 	if err := adapter.SetProperty(AdapterInterface+".Powered", dbus.MakeVariant(true)); err != nil {
-		return err
+		return fmt.Errorf("power Bluetooth adapter: %w", err)
 	}
 	if err := adapter.SetProperty(AdapterInterface+".Pairable", dbus.MakeVariant(options.Pairable)); err != nil {
-		return err
+		return fmt.Errorf("set Bluetooth adapter pairable: %w", err)
 	}
 	if err := adapter.SetProperty(AdapterInterface+".Discoverable", dbus.MakeVariant(options.Discoverable)); err != nil {
-		return err
+		return fmt.Errorf("set Bluetooth adapter discoverable: %w", err)
 	}
 
 	bluez := conn.Object("org.bluez", "/org/bluez")
@@ -444,10 +458,10 @@ func ConnectedPeer(ctx context.Context, conn *dbus.Conn, adapter string) (Peer, 
 	var objects map[dbus.ObjectPath]map[string]map[string]dbus.Variant
 	call := conn.Object("org.bluez", "/").CallWithContext(ctx, ObjectManagerInterface+".GetManagedObjects", 0)
 	if call.Err != nil {
-		return Peer{}, call.Err
+		return Peer{}, fmt.Errorf("get managed Bluetooth objects: %w", call.Err)
 	}
 	if err := call.Store(&objects); err != nil {
-		return Peer{}, err
+		return Peer{}, fmt.Errorf("store managed Bluetooth objects: %w", err)
 	}
 
 	adapterPrefix := "/org/bluez/" + adapter + "/dev_"
@@ -487,13 +501,13 @@ func ConnectedPeer(ctx context.Context, conn *dbus.Conn, adapter string) (Peer, 
 	}
 
 	if len(candidates) == 0 {
-		return Peer{}, fmt.Errorf("connected Bluetooth device was not found on %s", adapter)
+		return Peer{}, fmt.Errorf("%w on %s", errConnectedPeerNotFound, adapter)
 	}
 	sort.Slice(candidates, func(left, right int) bool {
 		return candidates[left].path < candidates[right].path
 	})
 	if len(candidates) > 1 {
-		return Peer{}, fmt.Errorf("multiple connected Bluetooth devices were found on %s", adapter)
+		return Peer{}, fmt.Errorf("%w on %s", errMultipleConnectedPeers, adapter)
 	}
 
 	return candidates[0].peer, nil
@@ -537,7 +551,7 @@ func (app *HIDApplication) serviceProperties(interfaceName string) (map[string]d
 func (app *HIDApplication) notifyInputLocked(report InputReport) error {
 	preferredPath, ok := app.inputReportPath[report.ID]
 	if !ok {
-		return nil
+		return fmt.Errorf("%w: 0x%02X", errUnknownInputReportID, report.ID)
 	}
 	fallbackPath := dbus.ObjectPath("")
 	if len(report.Data) == 8 {
@@ -598,7 +612,7 @@ func (app *HIDApplication) isNotifyingLocked(path dbus.ObjectPath) bool {
 func (app *HIDApplication) notifyLocked(path dbus.ObjectPath, report []byte) error {
 	characteristic := app.characteristics[path]
 	if characteristic == nil {
-		return fmt.Errorf("missing notify characteristic: %s", path)
+		return fmt.Errorf("%w: %s", errMissingNotifyCharacteristic, path)
 	}
 
 	characteristic.value = append(characteristic.value[:0], report...)
@@ -606,13 +620,17 @@ func (app *HIDApplication) notifyLocked(path dbus.ObjectPath, report []byte) err
 		return nil
 	}
 
-	return app.emitter.Emit(
+	if err := app.emitter.Emit(
 		path,
 		PropertiesInterface+".PropertiesChanged",
 		GATTCharacteristicInterface,
 		map[string]dbus.Variant{"Value": dbus.MakeVariant(append([]byte(nil), report...))},
 		[]string{},
-	)
+	); err != nil {
+		return fmt.Errorf("emit HID characteristic notification: %w", err)
+	}
+
+	return nil
 }
 
 func (service *Service) properties() map[string]dbus.Variant {
@@ -639,13 +657,13 @@ func (characteristic *Characteristic) WriteValue(value []byte, _ map[string]dbus
 	defer characteristic.app.mu.Unlock()
 
 	if !characteristic.writable {
-		return dbusError("org.bluez.Error.NotPermitted", errors.New("characteristic is not writable"))
+		return dbusError("org.bluez.Error.NotPermitted", errCharacteristicNotWritable)
 	}
 	if characteristic.protocolMode && len(value) != 1 {
-		return dbusError("org.bluez.Error.InvalidValueLength", errors.New("protocol mode must be one byte"))
+		return dbusError("org.bluez.Error.InvalidValueLength", errProtocolModeSize)
 	}
 	if characteristic.protocolMode && value[0] > 1 {
-		return dbusError("org.bluez.Error.InvalidValueLength", errors.New("protocol mode must be 0 or 1"))
+		return dbusError("org.bluez.Error.InvalidValueLength", errProtocolModeValue)
 	}
 	characteristic.value = append(characteristic.value[:0], value...)
 
@@ -657,7 +675,7 @@ func (characteristic *Characteristic) StartNotify() *dbus.Error {
 	defer characteristic.app.mu.Unlock()
 
 	if !characteristic.notify {
-		return dbusError("org.bluez.Error.NotSupported", errors.New("characteristic does not support notify"))
+		return dbusError("org.bluez.Error.NotSupported", errCharacteristicNotifyUnsupported)
 	}
 	characteristic.notifying = true
 	characteristic.app.subscribeOnce.Do(func() {
@@ -676,7 +694,7 @@ func (characteristic *Characteristic) StopNotify() *dbus.Error {
 	return nil
 }
 
-func (characteristic *Characteristic) Confirm() *dbus.Error {
+func (*Characteristic) Confirm() *dbus.Error {
 	return nil
 }
 
@@ -714,8 +732,8 @@ func (descriptor *Descriptor) ReadValue(options map[string]dbus.Variant) ([]byte
 	return value, nil
 }
 
-func (descriptor *Descriptor) WriteValue(_ []byte, _ map[string]dbus.Variant) *dbus.Error {
-	return dbusError("org.bluez.Error.NotPermitted", errors.New("descriptor is not writable"))
+func (*Descriptor) WriteValue(_ []byte, _ map[string]dbus.Variant) *dbus.Error {
+	return dbusError("org.bluez.Error.NotPermitted", errDescriptorNotWritable)
 }
 
 func (descriptor *Descriptor) propertiesForInterface(interfaceName string) (map[string]dbus.Variant, bool) {
@@ -743,7 +761,7 @@ func readWithOffset(value []byte, options map[string]dbus.Variant) ([]byte, erro
 		}
 	}
 	if int(offset) > len(value) {
-		return nil, fmt.Errorf("offset %d is beyond value length %d", offset, len(value))
+		return nil, fmt.Errorf("%w: offset %d, value length %d", errReadOffsetBeyondValue, offset, len(value))
 	}
 
 	return append([]byte(nil), value[offset:]...), nil
@@ -794,7 +812,7 @@ func boolProperty(properties map[string]dbus.Variant, name string) (bool, error)
 	var value bool
 	variant, ok := properties[name]
 	if !ok {
-		return false, fmt.Errorf("missing Bluetooth device property: %s", name)
+		return false, fmt.Errorf("%w: %s", errMissingBluetoothDeviceProperty, name)
 	}
 	if err := variant.Store(&value); err != nil {
 		return false, fmt.Errorf("read Bluetooth device property %s: %w", name, err)
@@ -807,7 +825,7 @@ func stringProperty(properties map[string]dbus.Variant, name string) (string, er
 	var value string
 	variant, ok := properties[name]
 	if !ok {
-		return "", fmt.Errorf("missing Bluetooth device property: %s", name)
+		return "", fmt.Errorf("%w: %s", errMissingBluetoothDeviceProperty, name)
 	}
 	if err := variant.Store(&value); err != nil {
 		return "", fmt.Errorf("read Bluetooth device property %s: %w", name, err)

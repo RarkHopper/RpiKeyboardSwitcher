@@ -81,3 +81,17 @@ func Test壊れたHIDreportDescriptorは拒否する(t *testing.T) {
 		t.Fatal("err = nil, want error")
 	}
 }
+
+func TestHIDreportDescriptorはゼロのReportIDを拒否する(t *testing.T) {
+	_, err := input.ParseDescriptor([]byte{
+		0x05, 0x01,
+		0x09, 0x06,
+		0xa1, 0x01,
+		0x85, 0x00,
+		0x81, 0x02,
+		0xc0,
+	})
+	if err == nil {
+		t.Fatal("err = nil, want error")
+	}
+}
