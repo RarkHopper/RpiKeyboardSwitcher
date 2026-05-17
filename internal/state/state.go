@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+var errIncompleteState = errors.New("state is incomplete")
+
 type State struct {
 	Target       string    `json:"target"`
 	BluetoothMAC string    `json:"bluetooth_mac"`
@@ -32,15 +34,15 @@ func Load(path string) (State, bool, error) {
 		return State{}, true, fmt.Errorf("decode state: %w", err)
 	}
 	if current.Target == "" || current.BluetoothMAC == "" || current.UpdatedAt.IsZero() {
-		return State{}, true, errors.New("state is incomplete")
+		return State{}, true, errIncompleteState
 	}
 
 	return current, true, nil
 }
 
 func Save(path string, current State) (err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create state directory: %w", err)
+	if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o750); mkdirErr != nil {
+		return fmt.Errorf("create state directory: %w", mkdirErr)
 	}
 
 	file, err := os.Create(path)

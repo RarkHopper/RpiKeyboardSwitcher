@@ -1,0 +1,4 @@
+[submodule "third_party/vagrant_utm"]
+	path = third_party/vagrant_utm
+	url = https://github.com/RarkHopper/vagrant_utm.git
+	branch = fix/remove-applescript-continuation-chars

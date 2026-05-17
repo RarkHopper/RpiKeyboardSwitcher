@@ -3,6 +3,7 @@ package execx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 )
@@ -19,7 +20,11 @@ func (OSRunner) Run(ctx context.Context, stdin io.Reader, stdout io.Writer, stde
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run %s: %w", name, err)
+	}
+
+	return nil
 }
 
 type exitCoder interface {

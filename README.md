@@ -5,7 +5,7 @@
 RpiKeyboardSwitcher is a Go prototype for using a Raspberry Pi as a Bluetooth HID keyboard bridge.
 The Raspberry Pi advertises itself as a BLE keyboard, learns paired target PCs from BlueZ, caches them in its config, and later switches between those cached targets from a short `kbd` command over SSH.
 
-USB keyboard input forwarding is not implemented yet. The current `kbd-hid` daemon can advertise a BLE HID keyboard and send fixed test text after the host subscribes to HID notifications.
+The `kbd-hid` daemon advertises itself as a BLE HID keyboard and forwards USB HID reports read from a Raspberry Pi hidraw device after the host subscribes to HID notifications.
 
 ## Commands
 
@@ -20,18 +20,19 @@ USB keyboard input forwarding is not implemented yet. The current `kbd-hid` daem
 | Raspberry Pi | `kbd-rpi`, `kbd-hid` | `/etc/kbd-switch/config.yaml` | Advertises the BLE keyboard, caches confirmed Bluetooth targets, and switches targets. |
 | PC used to run switch commands | `kbd` | `~/.config/kbd-switch/config.yaml` | Knows how to SSH to the Raspberry Pi. It does not store Bluetooth MAC addresses. |
 | PC used as a keyboard target | nothing required for input | OS Bluetooth settings | Pairs with `Rpi Keyboard Switcher` as a normal BLE keyboard. Install `kbd` here only if this PC also runs switch commands. |
-| Wired keyboard | none | none | Plugs into the Raspberry Pi over USB. Input forwarding is a later step. |
+| Wired keyboard | none | none | Plugs into the Raspberry Pi over USB. `kbd-hid` reads HID reports from `/dev/hidraw*`. |
 
 ## Flow
 
 First, learn a target on the Raspberry Pi:
 
 ```text
-sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
+sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml
   -> pair/connect from the target PC in the OS Bluetooth settings
   -> the host subscribes to HID input notifications
   -> kbd-hid reads BlueZ Device1 Address and Alias/Name
   -> kbd-hid saves targets.<generated-name> in /etc/kbd-switch/config.yaml
+  -> kbd-hid forwards Raspberry Pi USB keyboard input as BLE HID reports
 ```
 
 Then switch to that target from a PC:
@@ -49,6 +50,13 @@ The generated target key and display name are meant to be edited by the user. Th
 
 These steps build on a development PC, then place files on the Raspberry Pi and on the PC that runs switch commands. The examples use `pi@rpi-kbd.local` as the Raspberry Pi SSH target.
 
+### 0. Wiring
+
+- Plug the USB keyboard into a Raspberry Pi USB port.
+- Power on the Raspberry Pi and enable Bluetooth.
+- On the PC that receives keyboard input, have the Bluetooth settings and a text editor or another text field ready.
+- Make sure the PC that runs switch commands can SSH to the Raspberry Pi. This PC may be the same as the input target PC or a separate one.
+
 ### 1. Build
 
 Build the three binaries on the development PC.
@@ -57,7 +65,7 @@ Build the three binaries on the development PC.
 make build
 ```
 
-By default, `kbd` is built for the development PC OS/CPU, while `kbd-rpi` and `kbd-hid` are built for 64-bit Raspberry Pi OS as `linux/arm64`.
+By default, `kbd` is built for the development PC OS/CPU, while `kbd-rpi` and `kbd-hid` are built for 64-bit Raspberry Pi OS as `linux/arm64`. If another PC will run `kbd`, run `make build` on that PC or set `LOCAL_GOOS` and `LOCAL_GOARCH` for that PC.
 
 For 32-bit Raspberry Pi OS, pass `RPI_GOARCH=arm`.
 
@@ -80,7 +88,9 @@ The Raspberry Pi needs BlueZ and SSH. The Bluetooth adapter is usually named `hc
 
 ```sh
 command -v bluetoothctl
+sudo systemctl enable --now bluetooth.service
 systemctl is-active bluetooth.service
+bluetoothctl list
 ls /sys/class/bluetooth
 ```
 
@@ -89,10 +99,11 @@ If `bluetoothctl` is missing, install BlueZ on the Raspberry Pi.
 ```sh
 sudo apt-get update
 sudo apt-get install -y bluez
-sudo systemctl enable --now bluetooth.service
 ```
 
-If `ls /sys/class/bluetooth` does not show `hci0`, check the Raspberry Pi Bluetooth settings before continuing.
+If `bluetoothctl list` or `ls /sys/class/bluetooth` does not show `hci0`, check the Raspberry Pi Bluetooth settings before continuing.
+
+`kbd-hid` reads `/dev/hidraw*`. The manual check uses `sudo kbd-hid ...`, and the systemd unit also runs as root.
 
 Install the binaries under `/usr/local/bin`.
 
@@ -123,6 +134,7 @@ hid:
   appearance: keyboard
   pairable: true
   discoverable: true
+  hidraw_device: /dev/hidraw0
 ```
 
 After a target is learned, the file will contain entries like this:
@@ -146,6 +158,7 @@ Fields:
 - `hid.appearance`: HID appearance. Currently only `keyboard` is supported.
 - `hid.pairable`: when true or omitted, allow incoming pairing requests.
 - `hid.discoverable`: when true or omitted, make the adapter discoverable.
+- `hid.hidraw_device`: hidraw device to read. Set the `/dev/hidrawN` path for the USB keyboard.
 
 Target names may contain only letters, digits, `_`, `-`, and `.`. Unknown YAML fields are rejected.
 
@@ -157,18 +170,32 @@ Check the settings read by `kbd-hid` before touching Bluetooth:
 kbd-hid inspect --config /etc/kbd-switch/config.yaml
 ```
 
+Plug the USB keyboard into the Raspberry Pi and check the hidraw device name:
+
+```sh
+ls -l /dev/hidraw*
+udevadm info --query=all --name=/dev/hidraw0
+```
+
+Set `hid.hidraw_device` to the hidraw device that belongs to the USB keyboard. Use `ID_INPUT_KEYBOARD=1` and `HID_NAME` from `udevadm info` to identify it.
+
+```yaml
+hid:
+  hidraw_device: /dev/hidraw0
+```
+
 ### 4. Learn A Target
 
-For the first check, start `kbd-hid` by hand instead of systemd and verify pairing plus test input from a target PC.
+For the first check, start `kbd-hid` by hand instead of systemd and verify pairing plus USB keyboard input from a target PC.
 
 ```sh
 sudo systemctl stop kbd-hid.service 2>/dev/null || true
-sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml --test-text a
+sudo kbd-hid daemon --config /etc/kbd-switch/config.yaml
 ```
 
-This command keeps running. On the target PC, open the OS Bluetooth settings and pair with `Rpi Keyboard Switcher`. Once the host subscribes to HID notifications, `kbd-hid` reads the connected BlueZ device and adds it to `targets`. If the same Bluetooth MAC address is already present, the existing target key and name are kept.
+This command keeps running. On the target PC, open a text editor or another text field, then open the OS Bluetooth settings and pair with `Rpi Keyboard Switcher`. Once the host subscribes to HID notifications, `kbd-hid` reads the connected BlueZ device and adds it to `targets`. If the same Bluetooth MAC address is already present, the existing target key and name are kept.
 
-When the target PC receives `a` and `/etc/kbd-switch/config.yaml` gains a `targets` entry, stop the command with `Ctrl-C`. You can edit the generated target key and display name at this point. Leave the Bluetooth MAC address unchanged unless you know it is wrong.
+When `/etc/kbd-switch/config.yaml` gains a `targets` entry and USB keyboard input reaches the target PC, stop the command with `Ctrl-C`. You can edit the generated target key and display name at this point. Leave the Bluetooth MAC address unchanged unless you know it is wrong.
 
 ### 5. Run kbd-hid Under systemd
 
@@ -181,9 +208,11 @@ sudo systemctl enable --now kbd-hid.service
 sudo journalctl -u kbd-hid.service -f
 ```
 
+After checking the logs, press `Ctrl-C` to stop only `journalctl`. `kbd-hid.service` keeps running.
+
 ### 6. Install The PC Command
 
-Exit the Raspberry Pi shell, then install `kbd` on the PC that runs switch commands.
+Exit the Raspberry Pi shell. If the development PC is also the PC that runs switch commands, install `kbd` somewhere on PATH.
 
 ```sh
 mkdir -p ~/.local/bin
@@ -244,17 +273,31 @@ The default Raspberry Pi state path is `/run/kbd-switch/state.json`. Set `KBD_RP
 
 ## Tab Completion
 
+Load `kbd` completion on the PC that runs switch commands.
+
 For zsh:
 
 ```sh
 eval "$(kbd completion zsh)"
-eval "$(kbd-rpi completion zsh)"
 ```
 
 For bash:
 
 ```sh
 eval "$(kbd completion bash)"
+```
+
+If you use `kbd-rpi` directly on the Raspberry Pi, load `kbd-rpi` completion in the Raspberry Pi shell.
+
+For zsh:
+
+```sh
+eval "$(kbd-rpi completion zsh)"
+```
+
+For bash:
+
+```sh
 eval "$(kbd-rpi completion bash)"
 ```
 
@@ -262,13 +305,80 @@ Completion candidates are read on each completion request. `kbd` asks the Raspbe
 
 ## Security
 
-The Raspberry Pi sits in the key input path. A compromised or untrusted Raspberry Pi could read, store, modify, or inject key input. Do not use this with a work PC or managed PC without approval from the owner or administrator.
+The Raspberry Pi sits in the key input path. A compromised or untrusted Raspberry Pi could read, modify, or inject key input. Do not use this with a work PC or managed PC without approval from the owner or administrator.
 
-Input logging is not part of the initial implementation and should stay off by default.
+## Virtual Check
+
+With two Ubuntu arm64 VMs created by Vagrant and UTM, you can check the following path without a physical keyboard or physical Bluetooth adapter:
+
+```text
+peripheral VM:
+  CUSE fake hidraw -> kbd-hid -> BlueZ GATT server -> virtual HCI
+
+central VM:
+  virtual HCI -> BlueZ HoG client -> hidraw -> evdev KEY_A
+```
+
+Install Vagrant and UTM on the Mac:
+
+```sh
+brew tap hashicorp/tap
+brew install hashicorp/tap/hashicorp-vagrant
+brew install --cask utm
+```
+
+Run the check from the Mac. This command builds the UTM provider from `third_party/vagrant_utm`, installs it as a project-local Vagrant plugin, then creates or starts the VMs before running the BLE HID check:
+
+```sh
+make e2e
+```
+
+The check connects central VM `btvirt` to peripheral VM `/dev/vhci` through `tools/hci-proxy.py`. The peripheral VM creates a CUSE hidraw-compatible keyboard and advertises `kbd-hid` as a BLE HID keyboard. The central VM pairs with it through the Linux HoG client, then verifies both the report-ID-bearing report on `/dev/hidraw*` and `KEY_A` press/release events on `/dev/input/event*`.
+
+The script uses the `utm` Vagrant provider by default. If UTM NAT does not expose the Mac as `10.0.2.2` from the peripheral VM, pass the host and port that reach the central proxy:
+
+```sh
+KBD_E2E_CENTRAL_HOST=<host-for-central-proxy> KBD_E2E_CENTRAL_PORT=45560 make e2e
+```
 
 ## Development
+
+`make check` uses the Go toolchain and `uv`. The Python tools are managed by `tools/pyproject.toml` and `tools/uv.lock`; `uv` provides Python 3.12.
+
+```sh
+brew install go uv
+```
+
+`make ci` and `make python-runtime-check` build and import the Python dependencies used for DBus/GLib integration. On Linux, install the same packages as GitHub Actions:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  build-essential \
+  gobject-introspection \
+  libcairo2-dev \
+  libdbus-1-dev \
+  libfuse3-dev \
+  libgirepository1.0-dev \
+  libgirepository-2.0-dev \
+  pkg-config \
+  ruby \
+  shellcheck
+```
+
+To run `make python-runtime-check` on macOS, install the DBus and GObject Introspection development files too:
+
+```sh
+brew install cairo dbus gobject-introspection pkg-config
+```
 
 ```sh
 make fmt
 make check
+```
+
+To run the same checks as GitHub Actions on Linux, use the following command:
+
+```sh
+make ci
 ```

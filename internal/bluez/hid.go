@@ -52,6 +52,20 @@ const (
 	KeyboardAppearance uint16 = 0x03c1
 )
 
+var (
+	errUnknownInputReportID            = errors.New("unknown input report ID")
+	errConnectedPeerNotFound           = errors.New("connected Bluetooth device was not found")
+	errMultipleConnectedPeers          = errors.New("multiple connected Bluetooth devices were found")
+	errMissingNotifyCharacteristic     = errors.New("missing notify characteristic")
+	errCharacteristicNotWritable       = errors.New("characteristic is not writable")
+	errProtocolModeSize                = errors.New("protocol mode must be one byte")
+	errProtocolModeValue               = errors.New("protocol mode must be 0 or 1")
+	errCharacteristicNotifyUnsupported = errors.New("characteristic does not support notify")
+	errDescriptorNotWritable           = errors.New("descriptor is not writable")
+	errReadOffsetBeyondValue           = errors.New("offset is beyond value length")
+	errMissingBluetoothDeviceProperty  = errors.New("missing Bluetooth device property")
+)
+
 type emitter interface {
 	Emit(path dbus.ObjectPath, name string, values ...any) error
 }
@@ -61,6 +75,9 @@ type HIDApplication struct {
 	service         *Service
 	characteristics map[dbus.ObjectPath]*Characteristic
 	descriptors     map[dbus.ObjectPath]*Descriptor
+	inputReportIDs  []byte
+	inputReportPath map[byte]dbus.ObjectPath
+	outputReportIDs []byte
 	emitter         emitter
 	subscribed      chan struct{}
 	subscribeOnce   sync.Once
@@ -94,29 +111,60 @@ type Descriptor struct {
 }
 
 type HIDAdvertisement struct {
-	name       string
-	appearance uint16
+	name         string
+	appearance   uint16
+	discoverable bool
 }
 
 type DaemonOptions struct {
-	Adapter      string
-	Name         string
-	Appearance   uint16
-	Pairable     bool
-	Discoverable bool
-	TestReports  [][]byte
-	OnPeerReady  func(Peer) error
-	Log          io.Writer
+	Adapter         string
+	Name            string
+	Appearance      uint16
+	Pairable        bool
+	Discoverable    bool
+	ReportMap       []byte
+	InputReportIDs  []byte
+	OutputReportIDs []byte
+	InputReports    func(context.Context, func(InputReport) error) error
+	OnPeerReady     func(Peer) error
+	Log             io.Writer
 }
 
 type DBusDaemon struct{}
+
+type HIDApplicationOptions struct {
+	ReportMap       []byte
+	InputReportIDs  []byte
+	OutputReportIDs []byte
+}
+
+type InputReport struct {
+	ID   byte
+	Data []byte
+}
 
 type Peer struct {
 	Name         string
 	BluetoothMAC string
 }
 
-func NewHIDApplication() *HIDApplication {
+func NewHIDApplication(options ...HIDApplicationOptions) *HIDApplication {
+	settings := HIDApplicationOptions{
+		ReportMap:      defaultReportMap(),
+		InputReportIDs: []byte{0x00},
+	}
+	if len(options) > 0 {
+		if len(options[0].ReportMap) > 0 {
+			settings.ReportMap = append([]byte(nil), options[0].ReportMap...)
+		}
+		if len(options[0].InputReportIDs) > 0 {
+			settings.InputReportIDs = uniqueReportIDs(options[0].InputReportIDs)
+		}
+		if len(options[0].OutputReportIDs) > 0 {
+			settings.OutputReportIDs = uniqueReportIDs(options[0].OutputReportIDs)
+		}
+	}
+
 	app := &HIDApplication{
 		service: &Service{
 			path:    ServicePath,
@@ -125,25 +173,38 @@ func NewHIDApplication() *HIDApplication {
 		},
 		characteristics: make(map[dbus.ObjectPath]*Characteristic),
 		descriptors:     make(map[dbus.ObjectPath]*Descriptor),
+		inputReportIDs:  append([]byte(nil), settings.InputReportIDs...),
+		inputReportPath: make(map[byte]dbus.ObjectPath, len(settings.InputReportIDs)),
+		outputReportIDs: append([]byte(nil), settings.OutputReportIDs...),
 		subscribed:      make(chan struct{}),
 	}
 
 	app.addCharacteristic(HIDInfoPath, HIDInformationUUID, []string{"read"}, []byte{0x11, 0x01, 0x00, 0x02}, false, false, false)
-	app.addCharacteristic(ReportMapPath, ReportMapUUID, []string{"read"}, reportMap(), false, false, false)
+	app.addCharacteristic(ReportMapPath, ReportMapUUID, []string{"read"}, settings.ReportMap, false, false, false)
 	app.addCharacteristic(ControlPointPath, HIDControlPointUUID, []string{"write-without-response"}, nil, false, true, false)
 	app.addCharacteristic(ProtocolModePath, ProtocolModeUUID, []string{"read", "write-without-response"}, []byte{0x01}, false, true, true)
-	app.addCharacteristic(ReportPath, ReportUUID, []string{"read", "notify"}, make([]byte, 8), true, false, false)
+	for index, reportID := range settings.InputReportIDs {
+		path := inputReportPath(index)
+		app.inputReportPath[reportID] = path
+		app.addCharacteristic(path, ReportUUID, []string{"read", "notify"}, nil, true, false, false)
+		app.addDescriptor(path+"/desc0", ReportReferenceUUID, path, []string{"read"}, []byte{reportID, 0x01})
+	}
+	for index, reportID := range settings.OutputReportIDs {
+		path := outputReportPath(index)
+		app.addCharacteristic(path, ReportUUID, []string{"read", "write", "write-without-response"}, nil, false, true, false)
+		app.addDescriptor(path+"/desc0", ReportReferenceUUID, path, []string{"read"}, []byte{reportID, 0x02})
+	}
 	app.addCharacteristic(BootInputPath, BootKeyboardInputReportUUID, []string{"read", "notify"}, make([]byte, 8), true, false, false)
 	app.addCharacteristic(BootOutputPath, BootKeyboardOutputReportUUID, []string{"read", "write", "write-without-response"}, []byte{0x00}, false, true, false)
-	app.addDescriptor(ReportPath+"/desc0", ReportReferenceUUID, ReportPath, []string{"read"}, []byte{0x00, 0x01})
 
 	return app
 }
 
-func NewHIDAdvertisement(name string, appearance uint16) *HIDAdvertisement {
+func NewHIDAdvertisement(name string, appearance uint16, discoverable bool) *HIDAdvertisement {
 	return &HIDAdvertisement{
-		name:       name,
-		appearance: appearance,
+		name:         name,
+		appearance:   appearance,
+		discoverable: discoverable,
 	}
 }
 
@@ -185,7 +246,7 @@ func (app *HIDApplication) WaitForSubscription(ctx context.Context) error {
 	case <-app.subscribed:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("wait for HID subscription: %w", ctx.Err())
 	}
 }
 
@@ -194,15 +255,23 @@ func (app *HIDApplication) SendReports(reports [][]byte) error {
 	defer app.mu.Unlock()
 
 	for _, report := range reports {
-		if len(report) != 8 {
-			return fmt.Errorf("HID keyboard report must be 8 bytes: got %d", len(report))
-		}
-		if err := app.notifyInputLocked(report); err != nil {
+		if err := app.notifyInputLocked(InputReport{ID: app.inputReportIDs[0], Data: report}); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (app *HIDApplication) SendReport(report []byte) error {
+	return app.SendReports([][]byte{report})
+}
+
+func (app *HIDApplication) SendInputReport(report InputReport) error {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	return app.notifyInputLocked(report)
 }
 
 func (app *HIDApplication) SendReportsAfterSubscription(ctx context.Context, reports [][]byte) error {
@@ -220,10 +289,10 @@ func (app *HIDApplication) Export(conn *dbus.Conn) error {
 	app.SetEmitter(conn)
 
 	if err := conn.Export(app, AppPath, ObjectManagerInterface); err != nil {
-		return err
+		return fmt.Errorf("export HID object manager: %w", err)
 	}
 	if err := conn.ExportMethodTable(map[string]any{}, ServicePath, GATTServiceInterface); err != nil {
-		return err
+		return fmt.Errorf("export HID service method table: %w", err)
 	}
 	if err := exportProperties(conn, ServicePath, app.serviceProperties); err != nil {
 		return err
@@ -231,7 +300,7 @@ func (app *HIDApplication) Export(conn *dbus.Conn) error {
 
 	for path, characteristic := range app.characteristics {
 		if err := conn.Export(characteristic, path, GATTCharacteristicInterface); err != nil {
-			return err
+			return fmt.Errorf("export HID characteristic %s: %w", path, err)
 		}
 		if err := exportProperties(conn, path, characteristic.propertiesForInterface); err != nil {
 			return err
@@ -239,7 +308,7 @@ func (app *HIDApplication) Export(conn *dbus.Conn) error {
 	}
 	for path, descriptor := range app.descriptors {
 		if err := conn.Export(descriptor, path, GATTDescriptorInterface); err != nil {
-			return err
+			return fmt.Errorf("export HID descriptor %s: %w", path, err)
 		}
 		if err := exportProperties(conn, path, descriptor.propertiesForInterface); err != nil {
 			return err
@@ -255,17 +324,18 @@ func (advertisement *HIDAdvertisement) Properties() map[string]dbus.Variant {
 		"ServiceUUIDs": dbus.MakeVariant([]string{HIDServiceUUID}),
 		"LocalName":    dbus.MakeVariant(advertisement.name),
 		"Appearance":   dbus.MakeVariant(advertisement.appearance),
+		"Discoverable": dbus.MakeVariant(advertisement.discoverable),
 	}
 	return props
 }
 
-func (advertisement *HIDAdvertisement) Release() *dbus.Error {
+func (*HIDAdvertisement) Release() *dbus.Error {
 	return nil
 }
 
 func (advertisement *HIDAdvertisement) Export(conn *dbus.Conn) error {
 	if err := conn.Export(advertisement, AdvertisementPath, LEAdvertisementInterface); err != nil {
-		return err
+		return fmt.Errorf("export HID advertisement: %w", err)
 	}
 
 	return exportProperties(conn, AdvertisementPath, func(interfaceName string) (map[string]dbus.Variant, bool) {
@@ -282,20 +352,24 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 
 	conn, err := dbus.SystemBusPrivate()
 	if err != nil {
-		return err
+		return fmt.Errorf("connect to system bus: %w", err)
 	}
 	defer func() {
 		_ = conn.Close()
 	}()
 	if err := conn.Auth(nil); err != nil {
-		return err
+		return fmt.Errorf("authenticate system bus: %w", err)
 	}
 	if err := conn.Hello(); err != nil {
-		return err
+		return fmt.Errorf("send system bus hello: %w", err)
 	}
 
-	app := NewHIDApplication()
-	advertisement := NewHIDAdvertisement(options.Name, options.Appearance)
+	app := NewHIDApplication(HIDApplicationOptions{
+		ReportMap:       options.ReportMap,
+		InputReportIDs:  options.InputReportIDs,
+		OutputReportIDs: options.OutputReportIDs,
+	})
+	advertisement := NewHIDAdvertisement(options.Name, options.Appearance, options.Discoverable)
 	agent := NewAgent(options.Log)
 
 	if err := app.Export(conn); err != nil {
@@ -311,13 +385,13 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 	adapterPath := dbus.ObjectPath("/org/bluez/" + options.Adapter)
 	adapter := conn.Object("org.bluez", adapterPath)
 	if err := adapter.SetProperty(AdapterInterface+".Powered", dbus.MakeVariant(true)); err != nil {
-		return err
+		return fmt.Errorf("power Bluetooth adapter: %w", err)
 	}
 	if err := adapter.SetProperty(AdapterInterface+".Pairable", dbus.MakeVariant(options.Pairable)); err != nil {
-		return err
+		return fmt.Errorf("set Bluetooth adapter pairable: %w", err)
 	}
 	if err := adapter.SetProperty(AdapterInterface+".Discoverable", dbus.MakeVariant(options.Discoverable)); err != nil {
-		return err
+		return fmt.Errorf("set Bluetooth adapter discoverable: %w", err)
 	}
 
 	bluez := conn.Object("org.bluez", "/org/bluez")
@@ -345,7 +419,7 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 	}()
 
 	readyErrors := make(chan error, 1)
-	if len(options.TestReports) > 0 || options.OnPeerReady != nil {
+	if options.OnPeerReady != nil || options.InputReports != nil {
 		go func() {
 			if err := app.WaitForSubscription(ctx); err != nil {
 				if !errors.Is(err, context.Canceled) {
@@ -364,8 +438,10 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 					return
 				}
 			}
-			if err := app.SendReports(options.TestReports); err != nil {
-				readyErrors <- err
+			if options.InputReports != nil {
+				if err := options.InputReports(ctx, app.SendInputReport); err != nil && !errors.Is(err, context.Canceled) {
+					readyErrors <- err
+				}
 			}
 		}()
 	}
@@ -382,10 +458,10 @@ func ConnectedPeer(ctx context.Context, conn *dbus.Conn, adapter string) (Peer, 
 	var objects map[dbus.ObjectPath]map[string]map[string]dbus.Variant
 	call := conn.Object("org.bluez", "/").CallWithContext(ctx, ObjectManagerInterface+".GetManagedObjects", 0)
 	if call.Err != nil {
-		return Peer{}, call.Err
+		return Peer{}, fmt.Errorf("get managed Bluetooth objects: %w", call.Err)
 	}
 	if err := call.Store(&objects); err != nil {
-		return Peer{}, err
+		return Peer{}, fmt.Errorf("store managed Bluetooth objects: %w", err)
 	}
 
 	adapterPrefix := "/org/bluez/" + adapter + "/dev_"
@@ -425,13 +501,13 @@ func ConnectedPeer(ctx context.Context, conn *dbus.Conn, adapter string) (Peer, 
 	}
 
 	if len(candidates) == 0 {
-		return Peer{}, fmt.Errorf("connected Bluetooth device was not found on %s", adapter)
+		return Peer{}, fmt.Errorf("%w on %s", errConnectedPeerNotFound, adapter)
 	}
 	sort.Slice(candidates, func(left, right int) bool {
 		return candidates[left].path < candidates[right].path
 	})
 	if len(candidates) > 1 {
-		return Peer{}, fmt.Errorf("multiple connected Bluetooth devices were found on %s", adapter)
+		return Peer{}, fmt.Errorf("%w on %s", errMultipleConnectedPeers, adapter)
 	}
 
 	return candidates[0].peer, nil
@@ -472,21 +548,59 @@ func (app *HIDApplication) serviceProperties(interfaceName string) (map[string]d
 	return app.service.properties(), true
 }
 
-func (app *HIDApplication) notifyInputLocked(report []byte) error {
-	preferredPath := ReportPath
-	fallbackPath := BootInputPath
-	if protocolMode := app.characteristics[ProtocolModePath]; protocolMode != nil && len(protocolMode.value) > 0 && protocolMode.value[0] == 0x00 {
-		preferredPath = BootInputPath
-		fallbackPath = ReportPath
+func (app *HIDApplication) notifyInputLocked(report InputReport) error {
+	preferredPath, ok := app.inputReportPath[report.ID]
+	if !ok {
+		return fmt.Errorf("%w: 0x%02X", errUnknownInputReportID, report.ID)
+	}
+	fallbackPath := dbus.ObjectPath("")
+	if len(report.Data) == 8 {
+		fallbackPath = BootInputPath
+	}
+	if fallbackPath != "" {
+		protocolMode := app.characteristics[ProtocolModePath]
+		if protocolMode != nil && len(protocolMode.value) > 0 && protocolMode.value[0] == 0x00 {
+			preferredPath = BootInputPath
+			fallbackPath = app.inputReportPath[report.ID]
+		}
 	}
 	if app.isNotifyingLocked(preferredPath) {
-		return app.notifyLocked(preferredPath, report)
+		return app.notifyLocked(preferredPath, report.Data)
 	}
-	if app.isNotifyingLocked(fallbackPath) {
-		return app.notifyLocked(fallbackPath, report)
+	if fallbackPath != "" && app.isNotifyingLocked(fallbackPath) {
+		return app.notifyLocked(fallbackPath, report.Data)
 	}
 
 	return nil
+}
+
+func inputReportPath(index int) dbus.ObjectPath {
+	if index == 0 {
+		return ReportPath
+	}
+
+	return dbus.ObjectPath(fmt.Sprintf("%s/report%d", ServicePath, index))
+}
+
+func outputReportPath(index int) dbus.ObjectPath {
+	return dbus.ObjectPath(fmt.Sprintf("%s/output%d", ServicePath, index))
+}
+
+func uniqueReportIDs(ids []byte) []byte {
+	seen := map[byte]bool{}
+	out := make([]byte, 0, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return []byte{0x00}
+	}
+
+	return out
 }
 
 func (app *HIDApplication) isNotifyingLocked(path dbus.ObjectPath) bool {
@@ -498,7 +612,7 @@ func (app *HIDApplication) isNotifyingLocked(path dbus.ObjectPath) bool {
 func (app *HIDApplication) notifyLocked(path dbus.ObjectPath, report []byte) error {
 	characteristic := app.characteristics[path]
 	if characteristic == nil {
-		return fmt.Errorf("missing notify characteristic: %s", path)
+		return fmt.Errorf("%w: %s", errMissingNotifyCharacteristic, path)
 	}
 
 	characteristic.value = append(characteristic.value[:0], report...)
@@ -506,13 +620,17 @@ func (app *HIDApplication) notifyLocked(path dbus.ObjectPath, report []byte) err
 		return nil
 	}
 
-	return app.emitter.Emit(
+	if err := app.emitter.Emit(
 		path,
 		PropertiesInterface+".PropertiesChanged",
 		GATTCharacteristicInterface,
 		map[string]dbus.Variant{"Value": dbus.MakeVariant(append([]byte(nil), report...))},
 		[]string{},
-	)
+	); err != nil {
+		return fmt.Errorf("emit HID characteristic notification: %w", err)
+	}
+
+	return nil
 }
 
 func (service *Service) properties() map[string]dbus.Variant {
@@ -539,13 +657,13 @@ func (characteristic *Characteristic) WriteValue(value []byte, _ map[string]dbus
 	defer characteristic.app.mu.Unlock()
 
 	if !characteristic.writable {
-		return dbusError("org.bluez.Error.NotPermitted", errors.New("characteristic is not writable"))
+		return dbusError("org.bluez.Error.NotPermitted", errCharacteristicNotWritable)
 	}
 	if characteristic.protocolMode && len(value) != 1 {
-		return dbusError("org.bluez.Error.InvalidValueLength", errors.New("protocol mode must be one byte"))
+		return dbusError("org.bluez.Error.InvalidValueLength", errProtocolModeSize)
 	}
 	if characteristic.protocolMode && value[0] > 1 {
-		return dbusError("org.bluez.Error.InvalidValueLength", errors.New("protocol mode must be 0 or 1"))
+		return dbusError("org.bluez.Error.InvalidValueLength", errProtocolModeValue)
 	}
 	characteristic.value = append(characteristic.value[:0], value...)
 
@@ -557,7 +675,7 @@ func (characteristic *Characteristic) StartNotify() *dbus.Error {
 	defer characteristic.app.mu.Unlock()
 
 	if !characteristic.notify {
-		return dbusError("org.bluez.Error.NotSupported", errors.New("characteristic does not support notify"))
+		return dbusError("org.bluez.Error.NotSupported", errCharacteristicNotifyUnsupported)
 	}
 	characteristic.notifying = true
 	characteristic.app.subscribeOnce.Do(func() {
@@ -576,7 +694,7 @@ func (characteristic *Characteristic) StopNotify() *dbus.Error {
 	return nil
 }
 
-func (characteristic *Characteristic) Confirm() *dbus.Error {
+func (*Characteristic) Confirm() *dbus.Error {
 	return nil
 }
 
@@ -614,8 +732,8 @@ func (descriptor *Descriptor) ReadValue(options map[string]dbus.Variant) ([]byte
 	return value, nil
 }
 
-func (descriptor *Descriptor) WriteValue(_ []byte, _ map[string]dbus.Variant) *dbus.Error {
-	return dbusError("org.bluez.Error.NotPermitted", errors.New("descriptor is not writable"))
+func (*Descriptor) WriteValue(_ []byte, _ map[string]dbus.Variant) *dbus.Error {
+	return dbusError("org.bluez.Error.NotPermitted", errDescriptorNotWritable)
 }
 
 func (descriptor *Descriptor) propertiesForInterface(interfaceName string) (map[string]dbus.Variant, bool) {
@@ -643,13 +761,13 @@ func readWithOffset(value []byte, options map[string]dbus.Variant) ([]byte, erro
 		}
 	}
 	if int(offset) > len(value) {
-		return nil, fmt.Errorf("offset %d is beyond value length %d", offset, len(value))
+		return nil, fmt.Errorf("%w: offset %d, value length %d", errReadOffsetBeyondValue, offset, len(value))
 	}
 
 	return append([]byte(nil), value[offset:]...), nil
 }
 
-func reportMap() []byte {
+func defaultReportMap() []byte {
 	return []byte{
 		0x05, 0x01,
 		0x09, 0x06,
@@ -694,7 +812,7 @@ func boolProperty(properties map[string]dbus.Variant, name string) (bool, error)
 	var value bool
 	variant, ok := properties[name]
 	if !ok {
-		return false, fmt.Errorf("missing Bluetooth device property: %s", name)
+		return false, fmt.Errorf("%w: %s", errMissingBluetoothDeviceProperty, name)
 	}
 	if err := variant.Store(&value); err != nil {
 		return false, fmt.Errorf("read Bluetooth device property %s: %w", name, err)
@@ -707,7 +825,7 @@ func stringProperty(properties map[string]dbus.Variant, name string) (string, er
 	var value string
 	variant, ok := properties[name]
 	if !ok {
-		return "", fmt.Errorf("missing Bluetooth device property: %s", name)
+		return "", fmt.Errorf("%w: %s", errMissingBluetoothDeviceProperty, name)
 	}
 	if err := variant.Store(&value); err != nil {
 		return "", fmt.Errorf("read Bluetooth device property %s: %w", name, err)

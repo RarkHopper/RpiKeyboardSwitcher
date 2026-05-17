@@ -11,7 +11,8 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
-	os.Exit(hidapp.App{Context: ctx}.Run(os.Args[1:]))
+	code := hidapp.App{Context: ctx}.Run(os.Args[1:])
+	stop()
+	os.Exit(code)
 }

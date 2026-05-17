@@ -10,3 +10,4 @@ hid:
   appearance: keyboard
   pairable: true
   discoverable: true
+  hidraw_device: /dev/hidraw0

@@ -2,7 +2,104 @@ version: "2"
 
 linters:
   default: standard
+  enable:
+    # Input hygiene: catch confusing Unicode control bytes, stale loop copies,
+    # suspicious durations, unsafe type assertions, and wasted assignments.
+    - bidichk
+    - copyloopvar
+    - durationcheck
+    - forcetypeassert
+    - intrange
+    - mirror
+    - wastedassign
+
+    # Error handling: prefer wrapped errors, Go 1.13 error checks, static
+    # sentinel errors, and safer JSON error handling.
+    - err113
+    - errchkjson
+    - errname
+    - errorlint
+    - nilerr
+    - nilnil
+    - wrapcheck
+
+    # Security and resource handling: catch unchecked response bodies and
+    # common security mistakes in production code.
+    - bodyclose
+    - gosec
+
+    # Static bug checks: keep the standard analyzer set plus extra vet checks.
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Code quality: remove redundant conversions, catch misspellings, enforce
+    # useful nolint comments, and find simple allocation and stdlib cleanups.
+    - exptostd
+    - gocritic
+    - makezero
+    - misspell
+    - nolintlint
+    - prealloc
+    - predeclared
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+
+    # Coverage of domain-like branches: useful for enum-style switches even in
+    # a small command line application.
+    - exhaustive
+
+    # Complexity: keep very complex functions visible without forcing a large
+    # refactor of existing command dispatch in this PR.
+    - cyclop
+    - gocognit
+
+  settings:
+    cyclop:
+      max-complexity: 30
+      package-average: 10
+    gocognit:
+      min-complexity: 45
+    govet:
+      enable:
+        - nilness
+        - shadow
+    misspell:
+      locale: US
+    nolintlint:
+      allow-unused: false
+      require-explanation: true
+      require-specific: true
+    revive:
+      enable-default-rules: true
+      rules:
+        # The repository already has a compact internal package style. Requiring
+        # comments for every exported test helper and DBus method would add
+        # noise without catching behavior bugs.
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+        - name: unused-parameter
+        - name: unused-receiver
+
+  exclusions:
+    generated: strict
+    presets:
+      - comments
+      - common-false-positives
+      - std-error-handling
+    rules:
+      # Test fixtures intentionally use broad file permissions and temporary
+      # paths; production files still go through gosec.
+      - path: _test\.go
+        linters:
+          - gosec
 
 formatters:
   enable:
+    # Keep the existing formatter gate stricter than gofmt.
     - gofumpt

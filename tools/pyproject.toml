@@ -1,0 +1,69 @@
+[project]
+name = "rpi-keyboard-switcher-tools"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.optional-dependencies]
+runtime = [
+    "dbus-python>=1.4.0,<2",
+    "PyGObject>=3.50.0,<3.51",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.0,<2",
+    "pyright>=1.1.407,<2",
+    "ruff>=0.15.12,<0.16",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["."]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = [
+    "A",
+    "ANN",
+    "ARG",
+    "B",
+    "C4",
+    "E",
+    "F",
+    "FBT",
+    "I",
+    "PERF",
+    "PIE",
+    "PLC",
+    "PLE",
+    "PLW",
+    "PTH",
+    "RET",
+    "RUF",
+    "SIM",
+    "TRY",
+    "UP",
+]
+ignore = [
+    # The tools call third-party APIs whose positional boolean arguments are fixed.
+    "FBT003",
+    # These scripts intentionally print status lines consumed by the E2E shell test.
+    "T201",
+    # Short command-line scripts do not need custom exception classes for each message.
+    "TRY003",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+explicit_package_bases = true
+mypy_path = "stubs:."
+disallow_subclassing_any = false
+disallow_untyped_decorators = false

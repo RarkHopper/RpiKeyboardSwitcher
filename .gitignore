@@ -1,6 +1,7 @@
 /bin/
 /dist/
 /tmp/
+/packer_cache/
 
 *.out
 *.test
@@ -9,3 +10,4 @@ coverage.out
 .DS_Store
 .idea/
 .vscode/
+.vagrant/
