@@ -319,16 +319,15 @@ central VM:
   virtual HCI -> BlueZ HoG client -> hidraw -> evdev KEY_A
 ```
 
-Install Vagrant, UTM, and the UTM provider on the Mac:
+Install Vagrant and UTM on the Mac:
 
 ```sh
 brew tap hashicorp/tap
 brew install hashicorp/tap/hashicorp-vagrant
 brew install --cask utm
-vagrant plugin install vagrant_utm
 ```
 
-Run the check from the Mac. This command creates or starts the VMs before running the BLE HID check:
+Run the check from the Mac. This command builds the UTM provider from `third_party/vagrant_utm`, installs it as a project-local Vagrant plugin, then creates or starts the VMs before running the BLE HID check:
 
 ```sh
 make e2e
