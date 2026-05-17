@@ -100,7 +100,8 @@ func (app App) switchTarget(cfg config.LocalConfig, target string) int {
 }
 
 func (app App) runSSH(cfg config.LocalConfig, args ...string) int {
-	sshArgs := []string{cfg.RPI.User + "@" + cfg.RPI.Host, cfg.RPI.RemoteCommand}
+	sshArgs := make([]string, 0, 2+len(args))
+	sshArgs = append(sshArgs, cfg.RPI.User+"@"+cfg.RPI.Host, cfg.RPI.RemoteCommand)
 	sshArgs = append(sshArgs, args...)
 
 	if err := app.runner().Run(app.context(), app.stdin(), app.stdout(), app.stderr(), "ssh", sshArgs...); err != nil {
@@ -118,7 +119,12 @@ func resolveConfigPath(path string) (string, error) {
 		return envPath, nil
 	}
 
-	return config.DefaultLocalConfigPath()
+	defaultPath, err := config.DefaultLocalConfigPath()
+	if err != nil {
+		return "", fmt.Errorf("resolve default local config path: %w", err)
+	}
+
+	return defaultPath, nil
 }
 
 func printLocalCompletion(stdout io.Writer, shell string) int {

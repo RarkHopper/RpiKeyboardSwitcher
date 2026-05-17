@@ -16,7 +16,11 @@ func NewAgent(log io.Writer) *Agent {
 }
 
 func (agent *Agent) Export(conn *dbus.Conn) error {
-	return conn.Export(agent, AgentPath, AgentInterface)
+	if err := conn.Export(agent, AgentPath, AgentInterface); err != nil {
+		return fmt.Errorf("export pairing agent: %w", err)
+	}
+
+	return nil
 }
 
 func (agent *Agent) Release() *dbus.Error {

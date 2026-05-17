@@ -2,6 +2,7 @@ package hidapp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,11 @@ import (
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/bluez"
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/config"
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/input"
+)
+
+var (
+	errUnknownFlag       = errors.New("unknown flag")
+	errFlagRequiresValue = errors.New("flag requires a value")
 )
 
 type HIDDaemon interface {
@@ -84,7 +90,7 @@ func parseArgs(args []string) (cliOptions, error) {
 		case strings.HasPrefix(arg, "--config="):
 			options.configPath = strings.TrimPrefix(arg, "--config=")
 		case strings.HasPrefix(arg, "-"):
-			return cliOptions{}, fmt.Errorf("unknown flag: %s", arg)
+			return cliOptions{}, fmt.Errorf("%w: %s", errUnknownFlag, arg)
 		case options.command == "":
 			options.command = arg
 		default:
@@ -98,7 +104,7 @@ func parseArgs(args []string) (cliOptions, error) {
 func requireFlagValue(args []string, index int, name string) (string, int, error) {
 	next := index + 1
 	if next >= len(args) || strings.HasPrefix(args[next], "-") {
-		return "", index, fmt.Errorf("%s requires a value", name)
+		return "", index, fmt.Errorf("%w: %s", errFlagRequiresValue, name)
 	}
 
 	return args[next], next, nil
@@ -188,10 +194,10 @@ func (app App) daemonOptions(configPath string, cfg config.RPIConfig, descriptor
 	}
 }
 
-func (app App) cachePeer(configPath string, peer bluez.Peer) error {
+func (App) cachePeer(configPath string, peer bluez.Peer) error {
 	cfg, err := config.LoadRPI(configPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("load Raspberry Pi config: %w", err)
 	}
 	if cfg.Targets == nil {
 		cfg.Targets = map[string]config.Target{}
@@ -208,7 +214,11 @@ func (app App) cachePeer(configPath string, peer bluez.Peer) error {
 		BluetoothMAC: peer.BluetoothMAC,
 	}
 
-	return config.SaveRPI(configPath, cfg)
+	if err := config.SaveRPI(configPath, cfg); err != nil {
+		return fmt.Errorf("save Raspberry Pi config: %w", err)
+	}
+
+	return nil
 }
 
 func uniqueTargetKey(targets map[string]config.Target, name string) string {

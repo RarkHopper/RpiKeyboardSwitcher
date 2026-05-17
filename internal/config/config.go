@@ -26,6 +26,24 @@ var (
 	macPattern  = regexp.MustCompile(`^[0-9A-F]{2}(:[0-9A-F]{2}){5}$`)
 )
 
+var (
+	errRPIHostRequired            = errors.New("rpi.host is required")
+	errRPIHostWhitespace          = errors.New("rpi.host must not contain whitespace")
+	errRPIUserRequired            = errors.New("rpi.user is required")
+	errRPIUserWhitespace          = errors.New("rpi.user must not contain whitespace")
+	errRPIRemoteCommandRequired   = errors.New("rpi.remote_command is required")
+	errRPIRemoteCommandWhitespace = errors.New("rpi.remote_command must not contain whitespace")
+	errReconnectWaitNegative      = errors.New("behavior.reconnect_wait_sec must not be negative")
+	errTargetNameRequired         = errors.New("target name is required")
+	errTargetBluetoothMACInvalid  = errors.New("target bluetooth_mac must be uppercase Bluetooth MAC address")
+	errHIDNameRequired            = errors.New("hid.name is required")
+	errHIDNameControlCharacter    = errors.New("hid.name must not contain control characters")
+	errHIDAppearanceInvalid       = errors.New("hid.appearance must be keyboard")
+	errHIDRawDeviceRequired       = errors.New("hid.hidraw_device is required")
+	errHIDRawDeviceControlChar    = errors.New("hid.hidraw_device must not contain control characters")
+	errNameContainsInvalidChars   = errors.New("name must contain only letters, digits, '_', '-', '.'")
+)
+
 type LocalConfig struct {
 	RPI LocalRPIConfig `yaml:"rpi"`
 }
@@ -109,7 +127,7 @@ func SaveRPI(path string, cfg RPIConfig) error {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
 
@@ -135,7 +153,7 @@ func SaveRPI(path string, cfg RPIConfig) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close temporary config: %w", err)
 	}
-	if err := os.Chmod(tempPath, 0o644); err != nil {
+	if err := os.Chmod(tempPath, 0o600); err != nil {
 		return fmt.Errorf("chmod temporary config: %w", err)
 	}
 	if err := os.Rename(tempPath, path); err != nil {
@@ -147,29 +165,29 @@ func SaveRPI(path string, cfg RPIConfig) error {
 
 func (cfg LocalConfig) Validate() error {
 	if strings.TrimSpace(cfg.RPI.Host) == "" {
-		return errors.New("rpi.host is required")
+		return errRPIHostRequired
 	}
 	if hasSpace(cfg.RPI.Host) {
-		return errors.New("rpi.host must not contain whitespace")
+		return errRPIHostWhitespace
 	}
 	if strings.TrimSpace(cfg.RPI.User) == "" {
-		return errors.New("rpi.user is required")
+		return errRPIUserRequired
 	}
 	if hasSpace(cfg.RPI.User) {
-		return errors.New("rpi.user must not contain whitespace")
+		return errRPIUserWhitespace
 	}
 	if strings.TrimSpace(cfg.RPI.RemoteCommand) == "" {
-		return errors.New("rpi.remote_command is required")
+		return errRPIRemoteCommandRequired
 	}
 	if hasSpace(cfg.RPI.RemoteCommand) {
-		return errors.New("rpi.remote_command must not contain whitespace")
+		return errRPIRemoteCommandWhitespace
 	}
 	return nil
 }
 
 func (cfg RPIConfig) Validate() error {
 	if cfg.Behavior.ReconnectWaitSec < 0 {
-		return errors.New("behavior.reconnect_wait_sec must not be negative")
+		return errReconnectWaitNegative
 	}
 	if err := cfg.HID.Validate(); err != nil {
 		return err
@@ -188,10 +206,10 @@ func (cfg RPIConfig) Validate() error {
 
 func ValidateTarget(field string, target Target) error {
 	if strings.TrimSpace(target.Name) == "" {
-		return fmt.Errorf("%s.name is required", field)
+		return fmt.Errorf("%w: %s", errTargetNameRequired, field)
 	}
 	if !macPattern.MatchString(target.BluetoothMAC) {
-		return fmt.Errorf("%s.bluetooth_mac must be uppercase Bluetooth MAC address", field)
+		return fmt.Errorf("%w: %s", errTargetBluetoothMACInvalid, field)
 	}
 
 	return nil
@@ -214,19 +232,19 @@ func (hid HIDConfig) Validate() error {
 		return err
 	}
 	if strings.TrimSpace(hid.Name) == "" {
-		return errors.New("hid.name is required")
+		return errHIDNameRequired
 	}
 	if hasControl(hid.Name) {
-		return errors.New("hid.name must not contain control characters")
+		return errHIDNameControlCharacter
 	}
 	if hid.Appearance != HIDAppearanceKeyboard {
-		return errors.New("hid.appearance must be keyboard")
+		return errHIDAppearanceInvalid
 	}
 	if strings.TrimSpace(hid.HIDRawDevice) == "" {
-		return errors.New("hid.hidraw_device is required")
+		return errHIDRawDeviceRequired
 	}
 	if hasControl(hid.HIDRawDevice) {
-		return errors.New("hid.hidraw_device must not contain control characters")
+		return errHIDRawDeviceControlChar
 	}
 
 	return nil
@@ -264,7 +282,7 @@ func loadYAML(path string, out any) error {
 
 func validateName(field string, value string) error {
 	if !namePattern.MatchString(value) {
-		return fmt.Errorf("%s must contain only letters, digits, '_', '-', '.'", field)
+		return fmt.Errorf("%w: %s", errNameContainsInvalidChars, field)
 	}
 
 	return nil

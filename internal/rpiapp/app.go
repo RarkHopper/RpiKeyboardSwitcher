@@ -2,6 +2,7 @@ package rpiapp
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +14,11 @@ import (
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/config"
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/execx"
 	"github.com/RarkHopper/RpiKeyboardSwitcher/internal/state"
+)
+
+var (
+	errMissingTarget       = errors.New("missing target")
+	errUnknownSwitchOption = errors.New("unknown switch option")
 )
 
 type App struct {
@@ -123,18 +129,18 @@ type switchRequest struct {
 
 func parseSwitchRequest(args []string) (switchRequest, error) {
 	if len(args) == 0 {
-		return switchRequest{}, fmt.Errorf("missing target")
+		return switchRequest{}, errMissingTarget
 	}
 
 	req := switchRequest{target: args[0]}
 	if err := config.ValidateName("switch target", req.target); err != nil {
-		return switchRequest{}, err
+		return switchRequest{}, fmt.Errorf("validate switch target: %w", err)
 	}
 	if len(args) == 1 {
 		return req, nil
 	}
 
-	return switchRequest{}, fmt.Errorf("unknown switch option: %s", args[1])
+	return switchRequest{}, fmt.Errorf("%w: %s", errUnknownSwitchOption, args[1])
 }
 
 func (app App) switchTarget(configPath string, statePath string, req switchRequest) int {
@@ -376,7 +382,11 @@ _kbd_rpi "$@"
 `
 
 func (app App) runBluetoothctl(args ...string) error {
-	return app.runner().Run(app.context(), app.stdin(), app.stdout(), app.stderr(), "bluetoothctl", args...)
+	if err := app.runner().Run(app.context(), app.stdin(), app.stdout(), app.stderr(), "bluetoothctl", args...); err != nil {
+		return fmt.Errorf("run bluetoothctl: %w", err)
+	}
+
+	return nil
 }
 
 func (app App) runner() execx.Runner {

@@ -11,7 +11,11 @@ type propertiesObject struct {
 }
 
 func exportProperties(conn *dbus.Conn, path dbus.ObjectPath, getProperties func(string) (map[string]dbus.Variant, bool)) error {
-	return conn.Export(propertiesObject{getProperties: getProperties}, path, PropertiesInterface)
+	if err := conn.Export(propertiesObject{getProperties: getProperties}, path, PropertiesInterface); err != nil {
+		return fmt.Errorf("export properties for %s: %w", path, err)
+	}
+
+	return nil
 }
 
 func (object propertiesObject) Get(interfaceName string, propertyName string) (dbus.Variant, *dbus.Error) {
