@@ -344,12 +344,40 @@ KBD_E2E_CENTRAL_HOST=<Macから見たcentral proxyの宛先> KBD_E2E_CENTRAL_POR
 
 ## 開発
 
+`make check` は Go toolchain と `uv` を使います。Python tools は `tools/pyproject.toml` と `tools/uv.lock` で管理し、`uv` が Python 3.12 を用意します。
+
+```sh
+brew install go uv
+```
+
+`make ci` や `make python-runtime-check` は、DBus/GLib 連携の Python 依存を実際にビルドして import します。Linux では GitHub Actions と同じ前提として次のパッケージが必要です。
+
+```sh
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  build-essential \
+  gobject-introspection \
+  libcairo2-dev \
+  libdbus-1-dev \
+  libfuse3-dev \
+  libgirepository-2.0-dev \
+  pkg-config \
+  ruby \
+  shellcheck
+```
+
+macOS で `make python-runtime-check` まで実行する場合は、DBus と GObject Introspection の開発ファイルも入れます。
+
+```sh
+brew install cairo dbus gobject-introspection pkg-config
+```
+
 ```sh
 make fmt
 make check
 ```
 
-GitHub Actions と同じ検査を Linux 環境で実行する場合は、次を使います。`shellcheck`、`ruby`、`pkg-config`、`libfuse3-dev` が必要です。
+GitHub Actions と同じ検査を Linux 環境で実行する場合は、次を使います。
 
 ```sh
 make ci
