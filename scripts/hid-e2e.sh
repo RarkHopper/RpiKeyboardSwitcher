@@ -71,7 +71,9 @@ pkill -x btvirt >/dev/null 2>&1 || true
 pkill -x btmon >/dev/null 2>&1 || true
 pkill -x kbd-hid >/dev/null 2>&1 || true
 pkill -x hidraw-cuse >/dev/null 2>&1 || true
-pkill -x python3 >/dev/null 2>&1 || true
+pkill -f '/vagrant/tools/hci-proxy.py' >/dev/null 2>&1 || true
+pkill -f '/vagrant/tools/bluez-agent.py' >/dev/null 2>&1 || true
+pkill -f '/vagrant/tools/bluez-pair.py' >/dev/null 2>&1 || true
 sleep 1
 rmmod hci_vhci >/dev/null 2>&1 || true
 modprobe hci_vhci

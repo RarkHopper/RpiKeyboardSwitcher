@@ -1,4 +1,5 @@
 GO_VERSION = "1.26.3"
+GO_LINUX_ARM64_SHA256 = "9d89a3ea57d141c2b22d70083f2c8459ba3890f2d9e818e7e933b75614936565"
 
 def provision_e2e_vm(config)
   config.vm.synced_folder ".", "/vagrant"
@@ -27,6 +28,7 @@ def provision_e2e_vm(config)
       tmp_dir="$(mktemp -d)"
       trap 'rm -rf "$tmp_dir"' EXIT
       curl -fsSL "https://go.dev/dl/${go_archive}" -o "${tmp_dir}/${go_archive}"
+      printf '%s  %s\n' '#{GO_LINUX_ARM64_SHA256}' "${tmp_dir}/${go_archive}" | sha256sum -c -
       rm -rf /usr/local/go
       tar -C /usr/local -xzf "${tmp_dir}/${go_archive}"
       ln -sf /usr/local/go/bin/go /usr/local/bin/go

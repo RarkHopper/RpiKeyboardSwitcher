@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import select
 import selectors
+import signal
 import socket
 import time
 
@@ -57,8 +59,31 @@ def take_h4_packets(buf):
 def write_all_fd(fd, data):
     view = memoryview(data)
     while view:
-        written = os.write(fd, view)
+        try:
+            written = os.write(fd, view)
+        except BlockingIOError:
+            select.select([], [fd], [])
+            continue
+        except InterruptedError:
+            continue
+        if written == 0:
+            raise BrokenPipeError("short write to fd")
         view = view[written:]
+
+
+def send_all_socket(connection, data):
+    view = memoryview(data)
+    while view:
+        try:
+            sent = connection.send(view)
+        except BlockingIOError:
+            select.select([], [connection], [])
+            continue
+        except InterruptedError:
+            continue
+        if sent == 0:
+            raise BrokenPipeError("socket closed while sending")
+        view = view[sent:]
 
 
 def open_vhci():
@@ -98,10 +123,23 @@ def raw_proxy(left, right):
                 continue
             if not data:
                 return
-            key.data.sendall(data)
+            send_all_socket(key.data, data)
+
+
+def reap_children(_signum, _frame):
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        except InterruptedError:
+            continue
+        if pid == 0:
+            return
 
 
 def bridge(listen_host, listen_port, unix_path):
+    signal.signal(signal.SIGCHLD, reap_children)
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((listen_host, listen_port))
@@ -142,7 +180,7 @@ def hci_proxy(vhci_fd, connection):
                 packets, vhci_buf = take_h4_packets(vhci_buf)
                 for packet in packets:
                     if packet[:1] != b"\xff":
-                        connection.sendall(packet)
+                        send_all_socket(connection, packet)
             else:
                 try:
                     data = connection.recv(4096)
