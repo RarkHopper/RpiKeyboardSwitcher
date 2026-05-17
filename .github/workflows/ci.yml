@@ -25,14 +25,23 @@ jobs:
             go.mod
             go.sum
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.9.22"
+          enable-cache: true
+
       - name: Install check dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
+            gobject-introspection \
+            libcairo2-dev \
+            libdbus-1-dev \
             libfuse3-dev \
+            libgirepository-2.0-dev \
             pkg-config \
-            python3 \
             ruby \
             shellcheck
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import select
@@ -6,11 +8,13 @@ import selectors
 import signal
 import socket
 import time
+from types import FrameType
+from typing import cast
 
 HCI_PRIMARY = 0x00
 
 
-def h4_packet_length(buf):
+def h4_packet_length(buf: bytes) -> int | None:
     if not buf:
         return None
 
@@ -41,8 +45,8 @@ def h4_packet_length(buf):
     raise ValueError(f"unknown H4 packet type 0x{packet_type:02x}")
 
 
-def take_h4_packets(buf):
-    packets = []
+def take_h4_packets(buf: bytes) -> tuple[list[bytes], bytes]:
+    packets: list[bytes] = []
     while buf:
         try:
             length = h4_packet_length(buf)
@@ -56,7 +60,7 @@ def take_h4_packets(buf):
     return packets, buf
 
 
-def write_all_fd(fd, data):
+def write_all_fd(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
         try:
@@ -71,7 +75,7 @@ def write_all_fd(fd, data):
         view = view[written:]
 
 
-def send_all_socket(connection, data):
+def send_all_socket(connection: socket.socket, data: bytes) -> None:
     view = memoryview(data)
     while view:
         try:
@@ -86,29 +90,35 @@ def send_all_socket(connection, data):
         view = view[sent:]
 
 
-def open_vhci():
+def open_vhci() -> int:
     fd = os.open("/dev/vhci", os.O_RDWR | os.O_CLOEXEC)
     os.write(fd, bytes([0xFF, HCI_PRIMARY]))
     return fd
 
 
-def connect_tcp(host, port, timeout):
+def connect_tcp(host: str, port: int, timeout: float) -> socket.socket:
     deadline = time.monotonic() + timeout
     last_error = None
     while time.monotonic() < deadline:
         connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                connection.close()
+                break
+            connection.settimeout(remaining)
             connection.connect((host, port))
-            connection.setblocking(False)
-            return connection
         except OSError as error:
             last_error = error
             connection.close()
-            time.sleep(0.1)
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+        else:
+            connection.setblocking(False)
+            return connection
     raise TimeoutError(f"could not connect to {host}:{port}") from last_error
 
 
-def raw_proxy(left, right):
+def raw_proxy(left: socket.socket, right: socket.socket) -> None:
     left.setblocking(False)
     right.setblocking(False)
     selector = selectors.DefaultSelector()
@@ -117,16 +127,18 @@ def raw_proxy(left, right):
 
     while True:
         for key, _ in selector.select():
+            source = cast(socket.socket, key.fileobj)
+            destination = cast(socket.socket, key.data)
             try:
-                data = key.fileobj.recv(4096)
+                data = source.recv(4096)
             except BlockingIOError:
                 continue
             if not data:
                 return
-            send_all_socket(key.data, data)
+            send_all_socket(destination, data)
 
 
-def reap_children(_signum, _frame):
+def reap_children(_signum: int, _frame: FrameType | None) -> None:
     while True:
         try:
             pid, _ = os.waitpid(-1, os.WNOHANG)
@@ -138,7 +150,7 @@ def reap_children(_signum, _frame):
             return
 
 
-def bridge(listen_host, listen_port, unix_path):
+def bridge(listen_host: str, listen_port: int, unix_path: str) -> None:
     signal.signal(signal.SIGCHLD, reap_children)
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -149,7 +161,13 @@ def bridge(listen_host, listen_port, unix_path):
     while True:
         client, _ = server.accept()
         upstream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        upstream.connect(unix_path)
+        try:
+            upstream.connect(unix_path)
+        except OSError as error:
+            print(f"upstream connect failed {unix_path}: {error}", flush=True)
+            client.close()
+            upstream.close()
+            continue
         pid = os.fork()
         if pid == 0:
             server.close()
@@ -159,7 +177,7 @@ def bridge(listen_host, listen_port, unix_path):
         upstream.close()
 
 
-def hci_proxy(vhci_fd, connection):
+def hci_proxy(vhci_fd: int, connection: socket.socket) -> None:
     os.set_blocking(vhci_fd, False)
     selector = selectors.DefaultSelector()
     selector.register(vhci_fd, selectors.EVENT_READ, "vhci")
@@ -195,7 +213,7 @@ def hci_proxy(vhci_fd, connection):
                         write_all_fd(vhci_fd, packet)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
 

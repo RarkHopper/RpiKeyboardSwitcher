@@ -71,9 +71,9 @@ pkill -x btvirt >/dev/null 2>&1 || true
 pkill -x btmon >/dev/null 2>&1 || true
 pkill -x kbd-hid >/dev/null 2>&1 || true
 pkill -x hidraw-cuse >/dev/null 2>&1 || true
-pkill -f '/vagrant/tools/hci-proxy.py' >/dev/null 2>&1 || true
-pkill -f '/vagrant/tools/bluez-agent.py' >/dev/null 2>&1 || true
-pkill -f '/vagrant/tools/bluez-pair.py' >/dev/null 2>&1 || true
+pkill -f '(^|[ /])hci-proxy\.py( |$)' >/dev/null 2>&1 || true
+pkill -f '(^|[ /])bluez-agent\.py( |$)' >/dev/null 2>&1 || true
+pkill -f '(^|[ /])bluez-pair\.py( |$)' >/dev/null 2>&1 || true
 sleep 1
 rmmod hci_vhci >/dev/null 2>&1 || true
 modprobe hci_vhci
@@ -111,7 +111,7 @@ btmgmt_cmd() {
     printf 'select 0\n'
     printf '%s\n' "$1"
     printf 'quit\n'
-  } | script -qfec btmgmt /dev/null >>/tmp/btmgmt.log 2>&1 || true
+  } | script -qfec btmgmt /dev/null >>/tmp/btmgmt.log 2>&1
 }
 
 btmgmt_cmd 'power off'
@@ -134,6 +134,11 @@ rm -f /tmp/hid-e2e-events.log /tmp/hid-e2e-reader.log /tmp/bluetoothctl-pair.log
 
 rm -f /tmp/bt-server-le
 btvirt -s >/tmp/btvirt.log 2>&1 &
+tools_uv() {
+  UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+    uv --project /vagrant/tools --directory /vagrant/tools run \
+    --locked --managed-python --python 3.12 --extra runtime --no-dev "$@"
+}
 
 for _ in $(seq 1 100); do
   [ -S /tmp/bt-server-le ] && break
@@ -141,18 +146,23 @@ for _ in $(seq 1 100); do
 done
 [ -S /tmp/bt-server-le ]
 
-python3 /vagrant/tools/hci-proxy.py bridge \
+tools_uv python hci-proxy.py bridge \
   --listen-host 0.0.0.0 \
   --port 45550 \
   --unix-path /tmp/bt-server-le >/tmp/hci-bridge.log 2>&1 &
-python3 /vagrant/tools/hci-proxy.py client 127.0.0.1 --port 45550 >/tmp/hci-client.log 2>&1 &
+tools_uv python hci-proxy.py client 127.0.0.1 --port 45550 >/tmp/hci-client.log 2>&1 &
 REMOTE
 
   start_bluez_adapter central
 
   vm_sudo central <<'REMOTE'
 set -euo pipefail
-python3 /vagrant/tools/bluez-agent.py --capability KeyboardDisplay >/tmp/bluez-agent.log 2>&1 &
+tools_uv() {
+  UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+    uv --project /vagrant/tools --directory /vagrant/tools run \
+    --locked --managed-python --python 3.12 --extra runtime --no-dev "$@"
+}
+tools_uv python bluez-agent.py --capability KeyboardDisplay >/tmp/bluez-agent.log 2>&1 &
 for _ in $(seq 1 50); do
   grep -q '^agent registered ' /tmp/bluez-agent.log 2>/dev/null && break
   sleep 0.1
@@ -171,7 +181,12 @@ rm -f /tmp/hidraw.path /tmp/send-report /tmp/kbd-e2e.yaml /tmp/kbd-hid.log \
   /tmp/hidraw-cuse.log /tmp/bluetoothd.log /tmp/hci-client.log /tmp/btmgmt.log
 
 modprobe cuse
-python3 /vagrant/tools/hci-proxy.py client "${central_host}" --port "${central_port}" >/tmp/hci-client.log 2>&1 &
+tools_uv() {
+  UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+    uv --project /vagrant/tools --directory /vagrant/tools run \
+    --locked --managed-python --python 3.12 --extra runtime --no-dev "$@"
+}
+tools_uv python hci-proxy.py client "${central_host}" --port "${central_port}" >/tmp/hci-client.log 2>&1 &
 REMOTE
 
   start_bluez_adapter peripheral
@@ -233,7 +248,10 @@ pair_central() {
 set -euo pipefail
 
 {
-  python3 /vagrant/tools/bluez-pair.py --adapter hci0 "${mac}"
+  UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+    uv --project /vagrant/tools --directory /vagrant/tools run \
+    --locked --managed-python --python 3.12 --extra runtime --no-dev \
+    python bluez-pair.py --adapter hci0 "${mac}"
 } >/tmp/bluetoothctl-pair.log 2>&1
 
 grep -q 'Paired: yes' /tmp/bluetoothctl-pair.log
@@ -284,7 +302,10 @@ hidraw_path="$(find /sys/devices/virtual/misc/uhid -maxdepth 3 -type d -name 'hi
 hidraw_path="/dev/$(basename "$hidraw_path")"
 
 (timeout 25s btmon >/tmp/btmon-report.log 2>&1) &
-timeout 22s python3 - "$event_path" "$hidraw_path" >/tmp/hid-e2e-events.log 2>/tmp/hid-e2e-reader.log <<'PY' &
+UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+  timeout 22s uv --project /vagrant/tools --directory /vagrant/tools run \
+  --locked --managed-python --python 3.12 --no-dev \
+  python - "$event_path" "$hidraw_path" >/tmp/hid-e2e-events.log 2>/tmp/hid-e2e-reader.log <<'PY' &
 import binascii
 import os
 import select
