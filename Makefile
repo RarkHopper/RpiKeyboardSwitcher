@@ -1,6 +1,7 @@
-.PHONY: build fmt lint lint-config test check
+.PHONY: build fmt lint lint-config test check e2e
 
 GOLANGCI_LINT := go tool golangci-lint
+VAGRANT ?= vagrant
 LOCAL_GOOS ?= $(shell go env GOOS)
 LOCAL_GOARCH ?= $(shell go env GOARCH)
 RPI_GOOS ?= linux
@@ -25,3 +26,6 @@ test:
 	go test ./...
 
 check: lint-config lint test
+
+e2e:
+	VAGRANT=$(VAGRANT) scripts/hid-e2e.sh
