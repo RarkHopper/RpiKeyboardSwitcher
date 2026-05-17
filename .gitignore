@@ -5,7 +5,6 @@
 *.out
 *.test
 coverage.out
-__pycache__/
 
 .DS_Store
 .idea/
