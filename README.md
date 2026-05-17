@@ -307,6 +307,41 @@ Completion candidates are read on each completion request. `kbd` asks the Raspbe
 
 The Raspberry Pi sits in the key input path. A compromised or untrusted Raspberry Pi could read, modify, or inject key input. Do not use this with a work PC or managed PC without approval from the owner or administrator.
 
+## Virtual Check
+
+With two Ubuntu arm64 VMs created by Vagrant and UTM, you can check the following path without a physical keyboard or physical Bluetooth adapter:
+
+```text
+peripheral VM:
+  CUSE fake hidraw -> kbd-hid -> BlueZ GATT server -> virtual HCI
+
+central VM:
+  virtual HCI -> BlueZ HoG client -> hidraw -> evdev KEY_A
+```
+
+Install Vagrant, UTM, and the UTM provider on the Mac:
+
+```sh
+brew tap hashicorp/tap
+brew install hashicorp/tap/hashicorp-vagrant
+brew install --cask utm
+vagrant plugin install vagrant_utm
+```
+
+Run the check from the Mac. This command creates or starts the VMs before running the BLE HID check:
+
+```sh
+make e2e
+```
+
+The check connects central VM `btvirt` to peripheral VM `/dev/vhci` through `tools/hci-proxy.py`. The peripheral VM creates a CUSE hidraw-compatible keyboard and advertises `kbd-hid` as a BLE HID keyboard. The central VM pairs with it through the Linux HoG client, then verifies both the report-ID-bearing report on `/dev/hidraw*` and `KEY_A` press/release events on `/dev/input/event*`.
+
+The script uses the `utm` Vagrant provider by default. If UTM NAT does not expose the Mac as `10.0.2.2` from the peripheral VM, pass the host and port that reach the central proxy:
+
+```sh
+KBD_E2E_CENTRAL_HOST=<host-for-central-proxy> KBD_E2E_CENTRAL_PORT=45560 make e2e
+```
+
 ## Development
 
 ```sh

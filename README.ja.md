@@ -307,6 +307,41 @@ eval "$(kbd-rpi completion bash)"
 
 Raspberry Pi はキー入力の経路上に置かれます。信頼できない Raspberry Pi を使うと、キー入力の読み取り、変更、注入が可能になります。業務PCや管理対象PCでは、所有者または管理者の許可なしに使わないでください。
 
+## 仮想検証
+
+Vagrant と UTM で作った Ubuntu arm64 VM 2台で、物理キーボードや物理 Bluetooth アダプタを使わずに次の経路を確認できます。
+
+```text
+peripheral VM:
+  CUSE の fake hidraw -> kbd-hid -> BlueZ GATT server -> 仮想 HCI
+
+central VM:
+  仮想 HCI -> BlueZ HoG client -> hidraw -> evdev KEY_A
+```
+
+Mac 側に Vagrant、UTM、UTM provider を入れます。
+
+```sh
+brew tap hashicorp/tap
+brew install hashicorp/tap/hashicorp-vagrant
+brew install --cask utm
+vagrant plugin install vagrant_utm
+```
+
+Mac 側から検証を実行します。このコマンドは VM の作成または起動をしてから、BLE HID の検証を実行します。
+
+```sh
+make e2e
+```
+
+この検証は central VM の `btvirt` と peripheral VM の `/dev/vhci` を `tools/hci-proxy.py` でつなぎます。peripheral VM では CUSE で hidraw 互換のキーボードを作り、`kbd-hid` が BLE HID keyboard として広告します。central VM はペアリング後に Linux の HoG client で受け、`/dev/hidraw*` に report ID 付きの report が届くことと、`/dev/input/event*` に `KEY_A` の押下と解放が出ることを確認します。
+
+スクリプトは Vagrant provider に `utm` を使います。UTM の NAT で peripheral VM から Mac 側へ出る IP が `10.0.2.2` ではない環境では、central VM の proxy を指す宛先とポートを指定します。
+
+```sh
+KBD_E2E_CENTRAL_HOST=<Macから見たcentral proxyの宛先> KBD_E2E_CENTRAL_PORT=45560 make e2e
+```
+
 ## 開発
 
 ```sh
