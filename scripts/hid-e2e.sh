@@ -50,12 +50,15 @@ REMOTE
   done
 }
 
+# Ensure both VMs are running before test services are started.
 start_vms() {
   need_command "${vagrant_cmd}"
   log "starting Vagrant VMs"
   "${vagrant_cmd}" up --provider="${vagrant_provider}" central peripheral
 }
 
+# Reset one VM to a clean Bluetooth state so previous test runs cannot pair or
+# report input through stale processes.
 reset_bluetooth_host() {
   local vm="$1"
   vm_sudo "$vm" <<'REMOTE'
@@ -80,6 +83,8 @@ rm -rf /var/lib/bluetooth/*
 REMOTE
 }
 
+# Start BlueZ on one VM and verify that hci0 is present, powered, LE-only, and
+# connectable.
 start_bluez_adapter() {
   local vm="$1"
   vm_sudo "$vm" <<'REMOTE'
@@ -128,9 +133,8 @@ btmgmt_cmd 'connectable on'
 REMOTE
 }
 
-start_central() {
+start_central_hci_bridge() {
   log "starting central Bluetooth host"
-  reset_bluetooth_host central
   vm_sudo central <<'REMOTE'
 set -euo pipefail
 
@@ -158,9 +162,9 @@ tools_uv python hci-proxy.py bridge \
   --unix-path /tmp/bt-server-le >/tmp/hci-bridge.log 2>&1 &
 tools_uv python hci-proxy.py client 127.0.0.1 --port 45550 >/tmp/hci-client.log 2>&1 &
 REMOTE
+}
 
-  start_bluez_adapter central
-
+start_central_pairing_agent() {
   vm_sudo central <<'REMOTE'
 set -euo pipefail
 tools_uv() {
@@ -177,9 +181,15 @@ grep -q '^agent registered ' /tmp/bluez-agent.log
 REMOTE
 }
 
-start_peripheral() {
+prepare_central() {
+  reset_bluetooth_host central
+  start_central_hci_bridge
+  start_bluez_adapter central
+  start_central_pairing_agent
+}
+
+start_peripheral_hci_client() {
   log "starting peripheral BLE keyboard"
-  reset_bluetooth_host peripheral
   vm_sudo peripheral <<REMOTE
 set -euo pipefail
 
@@ -192,13 +202,15 @@ UV_PROJECT_ENVIRONMENT=/opt/rpi-keyboard-switcher-tools/.venv \
   --locked --managed-python --python 3.12 --extra runtime --no-dev \
   python hci-proxy.py client "${central_host}" --port "${central_port}" >/tmp/hci-client.log 2>&1 &
 REMOTE
+}
 
-  start_bluez_adapter peripheral
-
+start_peripheral_hid_keyboard() {
   vm_sudo peripheral <<'REMOTE'
 set -euo pipefail
 cd /vagrant
-GOCACHE=/tmp/go-cache GOMODCACHE=/tmp/go-mod /usr/local/go/bin/go build -o /tmp/kbd-hid ./cmd/kbd-hid
+GOCACHE=/var/cache/rpi-keyboard-switcher/go-build \
+  GOMODCACHE=/var/cache/rpi-keyboard-switcher/go-mod \
+  /usr/local/go/bin/go build -o /tmp/kbd-hid ./cmd/kbd-hid
 cflags="$(pkg-config fuse3 --cflags)"
 libs="$(pkg-config fuse3 --libs)"
 cc -Wall -Wextra -O2 -o /tmp/hidraw-cuse ./tools/hidraw-cuse.c $cflags $libs -pthread
@@ -235,6 +247,16 @@ grep -q 'Advertisement registered' /tmp/bluetoothd.log
 REMOTE
 }
 
+# Prepare the peripheral so it advertises a BLE HID keyboard backed by the fake
+# hidraw device.
+prepare_peripheral() {
+  reset_bluetooth_host peripheral
+  start_peripheral_hci_client
+  start_bluez_adapter peripheral
+  start_peripheral_hid_keyboard
+}
+
+# Read the peripheral adapter address that the central VM must pair with.
 peripheral_address() {
   vm_sudo peripheral <<'REMOTE' | awk '/^addr / { print $2; exit }'
 set -euo pipefail
@@ -245,7 +267,9 @@ btmgmt info | awk '
 REMOTE
 }
 
-pair_central() {
+# Pair central with peripheral and verify BlueZ reports paired, connected, and
+# trusted states.
+pair_central_with_peripheral() {
   local mac="$1"
   log "pairing central with ${mac}"
   vm_sudo central <<REMOTE
@@ -264,7 +288,9 @@ grep -q 'Trusted: yes' /tmp/bluetoothctl-pair.log
 REMOTE
 }
 
-wait_for_central_input() {
+# Wait for the paired BLE HID keyboard to appear as an evdev input device on
+# central.
+wait_for_central_evdev_keyboard() {
   local mac_lower
   mac_lower="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   log "waiting for central evdev keyboard"
@@ -296,7 +322,9 @@ exit 1
 REMOTE
 }
 
-capture_input() {
+# Start readers for central evdev and hidraw output, then verify the readers are
+# ready before injecting input.
+start_central_input_capture() {
   log "capturing central evdev and hidraw"
   vm_sudo central <<'REMOTE'
 set -euo pipefail
@@ -346,7 +374,8 @@ exit 1
 REMOTE
 }
 
-trigger_input() {
+# Trigger the fake peripheral hidraw device to send one keyboard report.
+trigger_peripheral_hidraw_report() {
   log "triggering fake hidraw keyboard"
   vm_sudo peripheral <<'REMOTE'
 set -euo pipefail
@@ -355,7 +384,9 @@ touch /tmp/send-report
 REMOTE
 }
 
-verify_input() {
+# Verify central received both hidraw reports and the KEY_A press/release evdev
+# events.
+verify_central_key_a_input() {
   log "verifying central input events"
   vm_sudo central <<'REMOTE'
 set -euo pipefail
@@ -374,18 +405,18 @@ REMOTE
 
 main() {
   start_vms
-  start_central
-  start_peripheral
+  prepare_central
+  prepare_peripheral
   mac="$(peripheral_address)"
   if [ -z "$mac" ]; then
     print_logs >&2 || true
     fail "peripheral address was empty"
   fi
-  pair_central "$mac"
-  wait_for_central_input "$mac"
-  capture_input
-  trigger_input
-  verify_input
+  pair_central_with_peripheral "$mac"
+  wait_for_central_evdev_keyboard "$mac"
+  start_central_input_capture
+  trigger_peripheral_hidraw_report
+  verify_central_key_a_input
   log "passed: virtual HCI pair, BLE HID notification, hidraw report, and evdev KEY_A press/release"
 }
 
