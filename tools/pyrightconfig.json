@@ -1,0 +1,8 @@
+{
+  "include": ["*.py", "lib", "stubs"],
+  "exclude": [".mypy_cache", ".ruff_cache", ".venv", "__pycache__"],
+  "pythonVersion": "3.12",
+  "stubPath": "stubs",
+  "typeCheckingMode": "strict",
+  "reportMissingModuleSource": "none"
+}

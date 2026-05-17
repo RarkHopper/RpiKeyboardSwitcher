@@ -13,7 +13,7 @@ TOOLS_DIR := tools
 TOOLS_UV := $(UV) --project $(TOOLS_DIR) --directory $(TOOLS_DIR)
 SHELL_SCRIPTS := scripts/hid-e2e.sh
 PYTHON_TOOLS := hci-proxy.py bluez-agent.py bluez-pair.py
-PYTHON_SOURCES := $(PYTHON_TOOLS) lib
+PYTHON_SOURCES := $(PYTHON_TOOLS) lib stubs
 CUSE_TOOL := tools/hidraw-cuse.c
 
 all: build
@@ -67,6 +67,7 @@ python-check:
 	$(TOOLS_UV) lock --check --python $(TOOLS_PYTHON) --managed-python
 	$(TOOLS_UV) run --locked --managed-python --python $(TOOLS_PYTHON) ruff check $(PYTHON_SOURCES)
 	$(TOOLS_UV) run --locked --managed-python --python $(TOOLS_PYTHON) mypy $(PYTHON_SOURCES)
+	$(TOOLS_UV) run --locked --managed-python --python $(TOOLS_PYTHON) pyright
 	$(TOOLS_UV) run --locked --managed-python --python $(TOOLS_PYTHON) python -m compileall -q $(PYTHON_SOURCES)
 
 python-runtime-check:

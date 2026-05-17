@@ -15,6 +15,7 @@ from gi.repository import GLib
 from lib.bluez_dbus import (
     DBusConnection,
     GMainLoop,
+    GMainLoopProxy,
     bluez_object,
     call_dbus,
     call_loop,
@@ -93,7 +94,7 @@ def main() -> None:
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = system_bus()
-    Agent(bus, AGENT_PATH)
+    Agent(bus.raw, AGENT_PATH)
 
     manager = AgentManager(bus)
     manager.register_agent(AGENT_PATH, capability)
@@ -109,7 +110,7 @@ def main() -> None:
     call_loop(loop, "run")
 
 
-loop = GMainLoop(GLib.MainLoop())
+loop: GMainLoop = GMainLoopProxy(GLib.MainLoop())
 
 
 if __name__ == "__main__":
