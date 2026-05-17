@@ -348,3 +348,9 @@ KBD_E2E_CENTRAL_HOST=<Macから見たcentral proxyの宛先> KBD_E2E_CENTRAL_POR
 make fmt
 make check
 ```
+
+GitHub Actions と同じ検査を Linux 環境で実行する場合は、次を使います。`shellcheck`、`ruby`、`pkg-config`、`libfuse3-dev` が必要です。
+
+```sh
+make ci
+```

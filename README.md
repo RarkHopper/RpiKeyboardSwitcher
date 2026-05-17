@@ -348,3 +348,9 @@ KBD_E2E_CENTRAL_HOST=<host-for-central-proxy> KBD_E2E_CENTRAL_PORT=45560 make e2
 make fmt
 make check
 ```
+
+To run the same checks as GitHub Actions on Linux, use the following command. It needs `shellcheck`, `ruby`, `pkg-config`, and `libfuse3-dev`.
+
+```sh
+make ci
+```

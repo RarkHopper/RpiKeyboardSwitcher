@@ -11,6 +11,7 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -24,5 +25,16 @@ jobs:
             go.mod
             go.sum
 
+      - name: Install check dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libfuse3-dev \
+            pkg-config \
+            python3 \
+            ruby \
+            shellcheck
+
       - name: Check
-        run: make check
+        run: make ci
