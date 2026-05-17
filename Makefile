@@ -1,7 +1,9 @@
-.PHONY: all clean build fmt fmt-check lint lint-config vet test race-test check mod-check script-check python-fmt python-check python-runtime-check packer-check vagrant-check packer-utm-plugin vagrant-utm-plugin cuse-check ci e2e
+.PHONY: all clean build fmt fmt-check lint lint-config vet test race-test check mod-check script-check python-fmt python-check python-runtime-check packer-check vagrant-check packer-utm-plugin vagrant-utm-plugin e2e-box cuse-check ci e2e
 
 GOLANGCI_LINT := go tool golangci-lint
 PACKER ?= packer
+UTM_APP ?= /Applications/UTM.app
+QEMU_IMG ?= $(shell find -L "$(UTM_APP)" -path '*/qemu-img.framework/Versions/*/qemu-img' -type f 2>/dev/null | head -n 1)
 VAGRANT ?= vagrant
 LOCAL_GOOS ?= $(shell go env GOOS)
 LOCAL_GOARCH ?= $(shell go env GOARCH)
@@ -16,6 +18,10 @@ SHELL_SCRIPTS := scripts/hid-e2e.sh scripts/install-packer-utm-plugin.sh scripts
 PYTHON_TOOLS := hci-proxy.py bluez-agent.py bluez-pair.py
 PYTHON_SOURCES := $(PYTHON_TOOLS) lib stubs
 CUSE_TOOL := tools/hidraw-cuse.c
+E2E_BOX_NAME ?= rpi-keyboard-switcher/e2e-ubuntu-24.04-arm64
+E2E_BOX_FILE ?= dist/boxes/rpi-keyboard-switcher-e2e-utm.box
+E2E_BOX_STAMP ?= dist/boxes/.rpi-keyboard-switcher-e2e-utm.added
+E2E_BOX_INPUTS := packer/e2e-utm.pkr.hcl packer/cloud-init/meta-data packer/cloud-init/network-config packer/cloud-init/user-data scripts/provision-e2e-vm.sh tools/pyproject.toml tools/uv.lock
 PACKER_UTM_PLUGIN_STAMP ?= dist/packer/.packer-utm-plugin-v4.0.0.installed
 
 all: build
@@ -93,6 +99,19 @@ packer-utm-plugin: $(PACKER_UTM_PLUGIN_STAMP)
 vagrant-utm-plugin:
 	VAGRANT=$(VAGRANT) scripts/install-vagrant-utm-plugin.sh
 
+$(E2E_BOX_FILE): $(E2E_BOX_INPUTS)
+	mkdir -p $(dir $@)
+	$(PACKER) init packer
+	PACKER=$(PACKER) scripts/install-packer-utm-plugin.sh
+	PATH="$(dir $(QEMU_IMG)):$$PATH" $(PACKER) build -force packer/e2e-utm.pkr.hcl
+
+$(E2E_BOX_STAMP): $(E2E_BOX_FILE)
+	$(VAGRANT) box add --force --name $(E2E_BOX_NAME) $(E2E_BOX_FILE)
+	mkdir -p $(dir $@)
+	touch $@
+
+e2e-box: $(E2E_BOX_STAMP)
+
 ifeq ($(LOCAL_GOOS),linux)
 cuse-check:
 	pkg-config --exists fuse3
@@ -104,5 +123,5 @@ endif
 
 ci: check race-test build mod-check script-check python-runtime-check packer-check vagrant-check cuse-check
 
-e2e: vagrant-utm-plugin
+e2e: vagrant-utm-plugin e2e-box
 	VAGRANT=$(VAGRANT) scripts/hid-e2e.sh
