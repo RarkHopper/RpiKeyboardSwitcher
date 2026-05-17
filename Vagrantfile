@@ -23,6 +23,7 @@ def provision_e2e_vm(config)
       libcairo2-dev \
       libdbus-1-dev \
       libfuse3-dev \
+      libgirepository1.0-dev \
       libgirepository-2.0-dev \
       pkg-config \
       procps \
