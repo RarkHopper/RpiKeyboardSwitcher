@@ -38,7 +38,6 @@ func TestGATTのObjectManagerはHIDserviceとcharacteristicを返す(t *testing.
 	if got := service["UUID"].Value(); got != HIDServiceUUID {
 		t.Fatalf("service UUID = %#v, want %#v", got, HIDServiceUUID)
 	}
-
 	for _, path := range []dbus.ObjectPath{
 		HIDInfoPath,
 		ReportMapPath,
@@ -59,7 +58,7 @@ func TestGATTのObjectManagerはHIDserviceとcharacteristicを返す(t *testing.
 }
 
 func TestAdvertisementはHIDserviceとkeyboardのappearanceを含む(t *testing.T) {
-	advertisement := NewHIDAdvertisement("Rpi Keyboard Switcher", KeyboardAppearance)
+	advertisement := NewHIDAdvertisement("Rpi Keyboard Switcher", KeyboardAppearance, true)
 	properties := advertisement.Properties()
 
 	if got := properties["Type"].Value(); got != "peripheral" {
@@ -70,6 +69,9 @@ func TestAdvertisementはHIDserviceとkeyboardのappearanceを含む(t *testing.
 	}
 	if got := properties["Appearance"].Value(); got != KeyboardAppearance {
 		t.Fatalf("Appearance = %#v, want %#v", got, KeyboardAppearance)
+	}
+	if got := properties["Discoverable"].Value(); got != true {
+		t.Fatalf("Discoverable = %#v, want true", got)
 	}
 	if got := properties["ServiceUUIDs"].Value(); !reflect.DeepEqual(got, []string{HIDServiceUUID}) {
 		t.Fatalf("ServiceUUIDs = %#v, want %#v", got, []string{HIDServiceUUID})

@@ -97,8 +97,9 @@ type Descriptor struct {
 }
 
 type HIDAdvertisement struct {
-	name       string
-	appearance uint16
+	name         string
+	appearance   uint16
+	discoverable bool
 }
 
 type DaemonOptions struct {
@@ -185,10 +186,11 @@ func NewHIDApplication(options ...HIDApplicationOptions) *HIDApplication {
 	return app
 }
 
-func NewHIDAdvertisement(name string, appearance uint16) *HIDAdvertisement {
+func NewHIDAdvertisement(name string, appearance uint16, discoverable bool) *HIDAdvertisement {
 	return &HIDAdvertisement{
-		name:       name,
-		appearance: appearance,
+		name:         name,
+		appearance:   appearance,
+		discoverable: discoverable,
 	}
 }
 
@@ -308,6 +310,7 @@ func (advertisement *HIDAdvertisement) Properties() map[string]dbus.Variant {
 		"ServiceUUIDs": dbus.MakeVariant([]string{HIDServiceUUID}),
 		"LocalName":    dbus.MakeVariant(advertisement.name),
 		"Appearance":   dbus.MakeVariant(advertisement.appearance),
+		"Discoverable": dbus.MakeVariant(advertisement.discoverable),
 	}
 	return props
 }
@@ -352,7 +355,7 @@ func (DBusDaemon) Run(ctx context.Context, options DaemonOptions) error {
 		InputReportIDs:  options.InputReportIDs,
 		OutputReportIDs: options.OutputReportIDs,
 	})
-	advertisement := NewHIDAdvertisement(options.Name, options.Appearance)
+	advertisement := NewHIDAdvertisement(options.Name, options.Appearance, options.Discoverable)
 	agent := NewAgent(options.Log)
 
 	if err := app.Export(conn); err != nil {
