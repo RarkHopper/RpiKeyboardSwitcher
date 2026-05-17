@@ -1,0 +1,27 @@
+#cloud-config
+hostname: rpi-keyboard-switcher-e2e
+manage_etc_hosts: true
+ssh_pwauth: true
+
+users:
+  - default
+  - name: vagrant
+    gecos: Vagrant
+    groups:
+      - adm
+      - cdrom
+      - dip
+      - plugdev
+      - sudo
+    shell: /bin/bash
+    sudo:
+      - ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    passwd: $6$vagrant$aYdZwu4306HGdE39rROOrbSnB8G1Jser5zc9VMESSr8PouIZdgoO.OYQsFTOHXRXSYzB1oCD7571llAG6WR15.
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC5kyIByRqaV9Yj+G8QBxYxUSbVmBoVoCiLKt1JgYfcrJWG4UXFhd1nbu6hFefRTTJbfS5n/iHpBL6hxF2Hpkm4PWJBgK4R40n0RtVGfG7D4qcCoaMYldK6efNQh8M1XPpFbUEpfPyeMhRZLYAYf6NSZ3MEz3AL2cYq5hf3a7e82QUKHQ2rHruXyFKy3n7paNLk5PmJMA2md6h+ZLHDdgsTwpn/1Wm8ww3qfRVQ5pS+X97oKFktW+0l2ikUBK55RymI5m9n8GbDV3RUvyswp+Tjs2B9G7E2Vmj0hUUNS+M+wv+FaC7gRCHtGKm6fI8UNEd3mQJA3Lw3CCZhjUowJhTxBa4pw1B7hrE/7oMHPtiAxQ90ZOPsMj2eVfPw5TIO7YM1nqH3ydJIOurMxhwrsEJbn2PNwB8iJHZ4TfdfhQWlF9wsnXTOBkLLFQsbAaQAmx4A1ICDII1bVD3bOfElJqDJJ22+Sg0DlPfkZJseHkLH//5dGQEdfG8= vagrant insecure public key
+
+chpasswd:
+  expire: false
+
+ssh_deletekeys: false

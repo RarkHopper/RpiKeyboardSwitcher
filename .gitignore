@@ -1,6 +1,7 @@
 /bin/
 /dist/
 /tmp/
+/packer_cache/
 
 *.out
 *.test
