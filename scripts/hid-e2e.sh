@@ -181,12 +181,10 @@ rm -f /tmp/hidraw.path /tmp/send-report /tmp/kbd-e2e.yaml /tmp/kbd-hid.log \
   /tmp/hidraw-cuse.log /tmp/bluetoothd.log /tmp/hci-client.log /tmp/btmgmt.log
 
 modprobe cuse
-tools_uv() {
-  UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
-    uv --project /vagrant/tools --directory /vagrant/tools run \
-    --locked --managed-python --python 3.12 --extra runtime --no-dev "$@"
-}
-tools_uv python hci-proxy.py client "${central_host}" --port "${central_port}" >/tmp/hci-client.log 2>&1 &
+UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+  uv --project /vagrant/tools --directory /vagrant/tools run \
+  --locked --managed-python --python 3.12 --extra runtime --no-dev \
+  python hci-proxy.py client "${central_host}" --port "${central_port}" >/tmp/hci-client.log 2>&1 &
 REMOTE
 
   start_bluez_adapter peripheral
