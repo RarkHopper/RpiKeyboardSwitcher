@@ -12,7 +12,6 @@ log() {
 
 fail() {
   printf 'hid-e2e: %s\n' "$*" >&2
-  print_logs >&2 || true
   exit 1
 }
 
@@ -97,12 +96,19 @@ if command -v bluetoothd >/dev/null 2>&1; then
 else
   bluetoothd_path="/usr/libexec/bluetooth/bluetoothd"
 fi
-"$bluetoothd_path" -n -d >/tmp/bluetoothd.log 2>&1 &
 
-for _ in $(seq 1 100); do
+start_bluetoothd() {
+  pkill -x bluetoothd >/dev/null 2>&1 || true
+  "$bluetoothd_path" -n -d >/tmp/bluetoothd.log 2>&1 &
+}
+
+start_bluetoothd
+
+for _ in $(seq 1 300); do
   busctl --system get-property org.bluez /org/bluez/hci0 org.bluez.Adapter1 Address >/tmp/bluez-adapter.log 2>&1 &&
     break
-  sleep 0.1
+  pgrep -x bluetoothd >/dev/null 2>&1 || start_bluetoothd
+  sleep 0.2
 done
 busctl --system get-property org.bluez /org/bluez/hci0 org.bluez.Adapter1 Address >/tmp/bluez-adapter.log
 
@@ -371,7 +377,10 @@ main() {
   start_central
   start_peripheral
   mac="$(peripheral_address)"
-  [ -n "$mac" ] || fail "peripheral address was empty"
+  if [ -z "$mac" ]; then
+    print_logs >&2 || true
+    fail "peripheral address was empty"
+  fi
   pair_central "$mac"
   wait_for_central_input "$mac"
   capture_input
