@@ -192,3 +192,35 @@ func TestBootProtocolではBootInputへだけreportを送る(t *testing.T) {
 		t.Fatalf("signal path = %s, want %s", emitter.signals[0].path, BootInputPath)
 	}
 }
+
+func TestBootInputだけ通知中ならreportID付きkeyboardReportをBootInputへ送る(t *testing.T) {
+	app := NewHIDApplication(HIDApplicationOptions{
+		ReportMap:      []byte{0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x85, 0x01, 0x81, 0x02, 0xc0},
+		InputReportIDs: []byte{0x01},
+	})
+	emitter := &fakeEmitter{}
+	app.SetEmitter(emitter)
+
+	if err := app.characteristics[BootInputPath].StartNotify(); err != nil {
+		t.Fatalf("BootInput StartNotify err = %v, want nil", err)
+	}
+
+	report := []byte{0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00}
+	if err := app.SendInputReport(InputReport{ID: 0x01, Data: report}); err != nil {
+		t.Fatalf("SendInputReport err = %v, want nil", err)
+	}
+
+	if len(emitter.signals) != 1 {
+		t.Fatalf("signals = %#v, want 1 signal", emitter.signals)
+	}
+	if emitter.signals[0].path != BootInputPath {
+		t.Fatalf("signal path = %s, want %s", emitter.signals[0].path, BootInputPath)
+	}
+	changed, ok := emitter.signals[0].values[1].(map[string]dbus.Variant)
+	if !ok {
+		t.Fatalf("changed properties = %#v", emitter.signals[0].values[1])
+	}
+	if got := changed["Value"].Value(); !reflect.DeepEqual(got, report) {
+		t.Fatalf("Value = %#v, want %#v", got, report)
+	}
+}

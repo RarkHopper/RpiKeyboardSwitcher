@@ -540,7 +540,7 @@ func (app *HIDApplication) notifyInputLocked(report InputReport) error {
 		return nil
 	}
 	fallbackPath := dbus.ObjectPath("")
-	if report.ID == 0x00 && len(report.Data) == 8 {
+	if len(report.Data) == 8 {
 		fallbackPath = BootInputPath
 	}
 	if fallbackPath != "" {
