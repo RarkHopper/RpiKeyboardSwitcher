@@ -1,4 +1,4 @@
-.PHONY: all clean build fmt fmt-check lint lint-config vet test race-test check mod-check script-check python-fmt python-check python-runtime-check vagrant-check packer-utm-plugin vagrant-utm-plugin cuse-check ci e2e
+.PHONY: all clean build fmt fmt-check lint lint-config vet test race-test check mod-check script-check python-fmt python-check python-runtime-check packer-check vagrant-check packer-utm-plugin vagrant-utm-plugin cuse-check ci e2e
 
 GOLANGCI_LINT := go tool golangci-lint
 PACKER ?= packer
@@ -75,6 +75,11 @@ python-check:
 python-runtime-check:
 	$(TOOLS_UV) run --locked --managed-python --python $(TOOLS_PYTHON) --extra runtime --no-dev python -c 'import dbus; import gi; from gi.repository import GLib; print(GLib.MainLoop)'
 
+packer-check:
+	$(PACKER) fmt -check packer
+	$(PACKER) init packer
+	$(PACKER) validate packer
+
 vagrant-check:
 	ruby -c Vagrantfile
 
@@ -92,7 +97,7 @@ cuse-check:
 	pkg-config --exists fuse3
 	cc -Wall -Wextra -fsyntax-only $$(pkg-config --cflags fuse3) $(CUSE_TOOL)
 
-ci: check race-test build mod-check script-check python-runtime-check vagrant-check cuse-check
+ci: check race-test build mod-check script-check python-runtime-check packer-check vagrant-check cuse-check
 
 e2e: vagrant-utm-plugin
 	VAGRANT=$(VAGRANT) scripts/hid-e2e.sh
