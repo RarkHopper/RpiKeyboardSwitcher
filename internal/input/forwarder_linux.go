@@ -83,7 +83,7 @@ func (forwarder Forwarder) Run(ctx context.Context, send func(Report) error) err
 }
 
 func readDescriptor(fd int, device string) (Descriptor, error) {
-	size, err := unix.IoctlRetInt(fd, uint(unix.HIDIOCGRDESCSIZE))
+	size, err := unix.IoctlGetInt(fd, uint(unix.HIDIOCGRDESCSIZE))
 	if err != nil {
 		return Descriptor{}, fmt.Errorf("read hidraw descriptor size %s: %w", device, err)
 	}
