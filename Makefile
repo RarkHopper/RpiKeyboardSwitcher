@@ -93,9 +93,14 @@ packer-utm-plugin: $(PACKER_UTM_PLUGIN_STAMP)
 vagrant-utm-plugin:
 	VAGRANT=$(VAGRANT) scripts/install-vagrant-utm-plugin.sh
 
+ifeq ($(LOCAL_GOOS),linux)
 cuse-check:
 	pkg-config --exists fuse3
 	cc -Wall -Wextra -fsyntax-only $$(pkg-config --cflags fuse3) $(CUSE_TOOL)
+else
+cuse-check:
+	@echo "skip cuse-check: fuse3 CUSE check requires Linux ($(LOCAL_GOOS))"
+endif
 
 ci: check race-test build mod-check script-check python-runtime-check packer-check vagrant-check cuse-check
 
