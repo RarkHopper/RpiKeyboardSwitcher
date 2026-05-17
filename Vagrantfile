@@ -47,7 +47,8 @@ def provision_e2e_vm(config)
     install -m 0755 "${tmp_dir}/uv-aarch64-unknown-linux-gnu/uv" /usr/local/bin/uv
     install -m 0755 "${tmp_dir}/uv-aarch64-unknown-linux-gnu/uvx" /usr/local/bin/uvx
 
-    sudo -u vagrant env UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+    install -d -m 0755 /opt/rpi-keyboard-switcher-tools
+    UV_PROJECT_ENVIRONMENT=/opt/rpi-keyboard-switcher-tools/.venv \
       /usr/local/bin/uv --project /vagrant/tools --directory /vagrant/tools sync \
       --locked --managed-python --python 3.12 --extra runtime --no-dev
 

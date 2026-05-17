@@ -85,9 +85,9 @@ start_bluez_adapter() {
   vm_sudo "$vm" <<'REMOTE'
 set -euo pipefail
 
-for _ in $(seq 1 100); do
+for _ in $(seq 1 300); do
   [ -d /sys/class/bluetooth/hci0 ] && break
-  sleep 0.1
+  sleep 0.2
 done
 [ -d /sys/class/bluetooth/hci0 ]
 
@@ -141,7 +141,7 @@ rm -f /tmp/hid-e2e-events.log /tmp/hid-e2e-reader.log /tmp/bluetoothctl-pair.log
 rm -f /tmp/bt-server-le
 btvirt -s >/tmp/btvirt.log 2>&1 &
 tools_uv() {
-  UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+  UV_PROJECT_ENVIRONMENT=/opt/rpi-keyboard-switcher-tools/.venv \
     uv --project /vagrant/tools --directory /vagrant/tools run \
     --locked --managed-python --python 3.12 --extra runtime --no-dev "$@"
 }
@@ -164,7 +164,7 @@ REMOTE
   vm_sudo central <<'REMOTE'
 set -euo pipefail
 tools_uv() {
-  UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+  UV_PROJECT_ENVIRONMENT=/opt/rpi-keyboard-switcher-tools/.venv \
     uv --project /vagrant/tools --directory /vagrant/tools run \
     --locked --managed-python --python 3.12 --extra runtime --no-dev "$@"
 }
@@ -187,7 +187,7 @@ rm -f /tmp/hidraw.path /tmp/send-report /tmp/kbd-e2e.yaml /tmp/kbd-hid.log \
   /tmp/hidraw-cuse.log /tmp/bluetoothd.log /tmp/hci-client.log /tmp/btmgmt.log
 
 modprobe cuse
-UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+UV_PROJECT_ENVIRONMENT=/opt/rpi-keyboard-switcher-tools/.venv \
   uv --project /vagrant/tools --directory /vagrant/tools run \
   --locked --managed-python --python 3.12 --extra runtime --no-dev \
   python hci-proxy.py client "${central_host}" --port "${central_port}" >/tmp/hci-client.log 2>&1 &
@@ -252,7 +252,7 @@ pair_central() {
 set -euo pipefail
 
 {
-  UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+  UV_PROJECT_ENVIRONMENT=/opt/rpi-keyboard-switcher-tools/.venv \
     uv --project /vagrant/tools --directory /vagrant/tools run \
     --locked --managed-python --python 3.12 --extra runtime --no-dev \
     python bluez-pair.py --adapter hci0 "${mac}"
@@ -306,7 +306,7 @@ hidraw_path="$(find /sys/devices/virtual/misc/uhid -maxdepth 3 -type d -name 'hi
 hidraw_path="/dev/$(basename "$hidraw_path")"
 
 (timeout 25s btmon >/tmp/btmon-report.log 2>&1) &
-UV_PROJECT_ENVIRONMENT=/home/vagrant/.cache/rpi-keyboard-switcher-tools/.venv \
+UV_PROJECT_ENVIRONMENT=/opt/rpi-keyboard-switcher-tools/.venv \
   timeout 22s uv --project /vagrant/tools --directory /vagrant/tools run \
   --locked --managed-python --python 3.12 --no-dev \
   python - "$event_path" "$hidraw_path" >/tmp/hid-e2e-events.log 2>/tmp/hid-e2e-reader.log <<'PY' &
